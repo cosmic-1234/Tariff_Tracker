@@ -53,7 +53,10 @@ export default function MasterDataView() {
                 <tbody>
                   {countries.map(c => (
                     <tr key={c.code}>
-                      <td style={{ fontWeight: 600 }}>{c.name}</td>
+                      <td style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '15px' }}>{c.flag || '🏳️'}</span>
+                        <span>{c.name}</span>
+                      </td>
                       <td><span className="badge neutral">{c.code}</span></td>
                       <td><span className="badge info">{c.region}</span></td>
                     </tr>

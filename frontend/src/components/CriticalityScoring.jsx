@@ -6,6 +6,7 @@ import {
 import { productMaster } from '../data/productMaster.js';
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
+import { lookupHSCodeDescription } from '../services/tariffLookupService.js';
 
 // Pre-defined fallback default VED sub-factors for the 30 base components
 function getDefaultVedSubFactors(category) {
@@ -723,8 +724,21 @@ export default function CriticalityScoring({ currency, convertAmount }) {
   };
 
   // --- MANUAL COMPONENT FORM ACTIONS ---
-  const handleFormChange = (field, val) => {
+  const handleFormChange = async (field, val) => {
     setManualInput(prev => ({ ...prev, [field]: val }));
+    
+    if (field === 'hsCode') {
+      const cleaned = String(val).replace(/[^0-9]/g, '');
+      if (cleaned.length === 4 || cleaned.length === 6) {
+        const liveDesc = await lookupHSCodeDescription(cleaned);
+        if (liveDesc) {
+          setManualInput(prev => ({
+            ...prev,
+            description: prev.description.trim() === '' ? liveDesc : prev.description
+          }));
+        }
+      }
+    }
   };
 
   const handleFormSubmit = (e) => {

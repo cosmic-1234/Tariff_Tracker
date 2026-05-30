@@ -6,6 +6,7 @@ import { countries, transportModes, getRegionForCountry, getApplicableCorridors 
 import { calculateTariff, compareSuppliers } from '../engine/tariffCalculator.js';
 import { runPairedScenarios, runSensitivityMatrix } from '../engine/scenarioAnalysis.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
+import { lookupHSCodeDescription } from '../services/tariffLookupService.js';
 
 const TRANSPORT_ICONS = { 'Ship/Ocean': Ship, 'Air': Plane, 'Train': Train };
 
@@ -50,6 +51,41 @@ export default function TariffCalculator({ currency, convertAmount }) {
       setSelectedProduct(null);
       setSuppliers([]);
       setSupplierInputs([]);
+
+      // If not in database, attempt real-time WCO Trade Tariff API lookup for custom HS codes
+      const cleaned = String(value).replace(/[^0-9]/g, '');
+      if (cleaned.length === 4 || cleaned.length === 6) {
+        lookupHSCodeDescription(cleaned).then(liveDesc => {
+          if (liveDesc) {
+            const customProduct = {
+              hsCode: cleaned,
+              erpCode: 'CUSTOM_PRD',
+              description: liveDesc,
+              category: 'Other Parts',
+              daysOfCoverage: 30,
+              inHandInventory: 10,
+              inTransitInventory: 0,
+              inventoryValue: 0,
+              safetyStock: 5,
+              roq: 10,
+              reviewType: 'Spot Sourcing'
+            };
+            const customSuppliers = [
+              { supplierId: 'SUP_CUST_A', supplierName: 'Global Supplier A', country: 'Germany', region: 'EU', countryCode: 'DE', defaultTransport: 'Ship/Ocean', supplyPct: 100, leadTimeDays: 14, reliability: 95 },
+              { supplierId: 'SUP_CUST_B', supplierName: 'Global Supplier B', country: 'China', region: 'Asia', countryCode: 'CN', defaultTransport: 'Ship/Ocean', supplyPct: 0, leadTimeDays: 21, reliability: 90 },
+            ];
+            
+            setSelectedProduct(customProduct);
+            setSuppliers(customSuppliers);
+            setSupplierInputs(customSuppliers.map(s => ({
+              supplierId: s.supplierId,
+              fob: '',
+              numberOfUnits: '',
+              transportMode: s.defaultTransport,
+            })));
+          }
+        });
+      }
     }
   }, []);
 
