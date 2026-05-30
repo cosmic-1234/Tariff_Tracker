@@ -734,7 +734,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
         if (liveDesc) {
           setManualInput(prev => ({
             ...prev,
-            description: prev.description.trim() === '' ? liveDesc : prev.description
+            description: liveDesc
           }));
         }
       }
