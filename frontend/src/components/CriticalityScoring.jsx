@@ -1,0 +1,1879 @@
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { 
+  ShieldAlert, Settings2, FileSpreadsheet, Plus, Upload, Download, Filter, 
+  Trash2, Edit3, CheckCircle2, ChevronRight, Layers, Sliders, MapPin, RefreshCw
+} from 'lucide-react';
+import { productMaster } from '../data/productMaster.js';
+import { getSuppliersForProduct } from '../data/supplierMaster.js';
+import { formatCurrency } from '../services/exchangeRateService.js';
+
+// Pre-defined fallback default VED sub-factors for the 30 base components
+function getDefaultVedSubFactors(category) {
+  const cat = String(category).toLowerCase();
+  if (
+    cat.includes('engine') || 
+    cat.includes('transmission') || 
+    cat.includes('drivetrain') || 
+    cat.includes('brake') || 
+    cat.includes('electrical')
+  ) {
+    return { prodStop: 5, bottleneck: 5, substitutability: 4, safetyQuality: 4, recovery: 4 };
+  } else if (
+    cat.includes('hvac') || 
+    cat.includes('fuel') || 
+    cat.includes('steering') || 
+    cat.includes('suspension') || 
+    cat.includes('wheel') || 
+    cat.includes('tire')
+  ) {
+    return { prodStop: 3, bottleneck: 4, substitutability: 3, safetyQuality: 3, recovery: 3 };
+  } else {
+    return { prodStop: 1, bottleneck: 2, substitutability: 1, safetyQuality: 1, recovery: 2 };
+  }
+}
+
+// Initial country risk tiers
+const initialCountryTiers = {
+  'India': 1, // Domestic
+  'China': 3, // Stable International / dist
+  'USA': 3,
+  'Germany': 3,
+  'Japan': 3,
+  'UK': 3,
+  'France': 3,
+  'Italy': 3,
+  'South Korea': 3,
+  'Mexico': 4, // Distant / import-dep
+  'Brazil': 4,
+  'Other': 3
+};
+
+// Proportional Binary Tree Partitioning Layout Algorithm for custom HTML Treemap
+function computeTreemapLayout(items, x, y, width, height) {
+  if (!items || items.length === 0) return [];
+  if (items.length === 1) {
+    return [{ ...items[0], x, y, w: width, h: height }];
+  }
+  
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  if (total <= 0) {
+    const count = items.length;
+    if (width > height) {
+      const w1 = width / count;
+      return items.map((item, i) => ({ ...item, x: x + i * w1, y, w: w1, h: height }));
+    } else {
+      const h1 = height / count;
+      return items.map((item, i) => ({ ...item, x, y: y + i * h1, w: width, h: h1 }));
+    }
+  }
+  
+  let leftSum = 0;
+  let splitIndex = 0;
+  let minDiff = Infinity;
+  for (let i = 0; i < items.length - 1; i++) {
+    leftSum += items[i].value;
+    const diff = Math.abs(leftSum - total / 2);
+    if (diff < minDiff) {
+      minDiff = diff;
+      splitIndex = i + 1;
+    }
+  }
+  if (splitIndex === 0) splitIndex = 1;
+  
+  const leftGroup = items.slice(0, splitIndex);
+  const rightGroup = items.slice(splitIndex);
+  
+  const leftVal = leftGroup.reduce((sum, item) => sum + item.value, 0);
+  const leftRatio = leftVal / total;
+  
+  if (width > height) {
+    const w1 = width * leftRatio;
+    return [
+      ...computeTreemapLayout(leftGroup, x, y, w1, height),
+      ...computeTreemapLayout(rightGroup, x + w1, y, width - w1, height)
+    ];
+  } else {
+    const h1 = height * leftRatio;
+    return [
+      ...computeTreemapLayout(leftGroup, x, y, width, h1),
+      ...computeTreemapLayout(rightGroup, x, y + h1, width, height - h1)
+    ];
+  }
+}
+
+export default function CriticalityScoring({ currency, convertAmount }) {
+  // --- STATE DECLARATIONS ---
+  const [components, setComponents] = useState(() => {
+    // Dynamically build initial components with calculations from product/supplier master
+    return productMaster.map(p => {
+      const suppliers = getSuppliersForProduct(p.erpCode) || [];
+      const primarySupplier = suppliers.reduce((prev, current) => 
+        (prev.supplyPct > current.supplyPct) ? prev : current, { supplyPct: 100, reliability: 90, leadTimeDays: 15, moq: 1, country: 'India' }
+      );
+
+      const maxLeadTime = suppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
+      const numSuppliers = suppliers.length || 1;
+      const defaultVed = getDefaultVedSubFactors(p.category);
+
+      return {
+        erpCode: p.erpCode,
+        hsCode: p.hsCode,
+        category: p.category,
+        description: p.description,
+        inHandInventory: p.inHandInventory,
+        inventoryValue: p.inventoryValue,
+        inTransitInventory: p.inTransitInventory,
+        daysOfCoverage: p.daysOfCoverage || p.daysOfCover || 30,
+        roq: p.roq,
+        safetyStock: p.safetyStock,
+        
+        // SDE scoring elements
+        supplierCode: primarySupplier.supplierId || 'SUP0001',
+        supplierName: primarySupplier.supplierName || 'Primary Supplier',
+        countryOfOrigin: primarySupplier.country || 'India',
+        supplyPct: primarySupplier.supplyPct || 100,
+        reliabilityOTIF: primarySupplier.reliability || 90,
+        leadTimeDays: maxLeadTime,
+        moq: primarySupplier.moq || 1,
+        numSuppliers,
+
+        // VED scoring elements (defaults)
+        ...defaultVed,
+        
+        isCustom: false
+      };
+    });
+  });
+
+  const [activeTab, setActiveTab] = useState('upload'); // 'upload' or 'manual'
+  const [selectedCell, setSelectedCell] = useState(null); // { sde: 1-5, ved: 1-5 }
+  const [selectedBand, setSelectedBand] = useState('All');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [matrixSizingMode, setMatrixSizingMode] = useState('score'); // 'score', 'value', 'count', 'equal'
+  const [viewMode, setViewMode] = useState('treemap'); // 'treemap' (default) or 'matrix'
+  const [treemapGroup, setTreemapGroup] = useState('product'); // 'product', 'category', 'cell'
+  const [hoveredCard, setHoveredCard] = useState(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const containerRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ width: 450, height: 380 });
+  
+  // Collapse configurations
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [editingComponent, setEditingComponent] = useState(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        setDimensions({
+          width: width || 450,
+          height: height || 380
+        });
+      }
+    });
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // --- CONFIGURABLE STATES (Weights, Thresholds, Country Tiers) ---
+  const [sdeWeights, setSdeWeights] = useState({
+    concentration: 0.25,
+    leadTime: 0.20,
+    reliability: 0.20,
+    buffer: 0.20,
+    moq: 0.10,
+    geography: 0.05
+  });
+
+  const [vedWeights, setVedWeights] = useState({
+    prodStop: 0.35,
+    bottleneck: 0.20,
+    substitutability: 0.20,
+    safetyQuality: 0.15,
+    recovery: 0.10
+  });
+
+  const [countryTiers, setCountryTiers] = useState(initialCountryTiers);
+  const [newCountryName, setNewCountryName] = useState('');
+  const [newCountryRisk, setNewCountryRisk] = useState(3);
+
+  const [bandsConfig, setBandsConfig] = useState([
+    { name: 'Low', min: 1, max: 4, desc: 'Standard planning; low-touch review', color: 'band-low' },
+    { name: 'Moderate', min: 5, max: 9, desc: 'Planner monitoring; monthly review', color: 'band-moderate' },
+    { name: 'High', min: 10, max: 15, desc: 'Safety stock & supplier review', color: 'band-high' },
+    { name: 'Very High', min: 16, max: 20, desc: 'Alternate source; weekly review', color: 'band-veryhigh' },
+    { name: 'Critical', min: 21, max: 25, desc: 'Executive watchlist; watchlist', color: 'band-critical' }
+  ]);
+
+  // VED meta labels
+  const [vedMeta, setVedMeta] = useState({
+    prodStop: { label: "Production Stop Impact", desc: "Line stoppage risk on output stoppage" },
+    bottleneck: { label: "Process Bottleneck", desc: "Production bottleneck dependence" },
+    substitutability: { label: "Substitutability", desc: "Validated replacement availability" },
+    safetyQuality: { label: "Safety & Quality", desc: "Compliance, hazard or product safety" },
+    recovery: { label: "Recovery Time", desc: "Lead time to restore normal supply" }
+  });
+
+  const [stockoutConfig, setStockoutConfig] = useState({
+    inHandLowDays: 10,
+    docLowDays: 15,
+    leadTimeLongDays: 30
+  });
+
+  // Manual component inputs state
+  const [manualInput, setManualInput] = useState({
+    erpCode: '',
+    hsCode: '',
+    category: 'Engine',
+    description: '',
+    inHandInventory: 50,
+    inventoryValue: 10000,
+    inTransitInventory: 0,
+    daysOfCoverage: 30,
+    roq: 100,
+    safetyStock: 10,
+    supplierCode: 'SUP0001',
+    supplierName: 'New Supplier',
+    countryOfOrigin: 'India',
+    supplyPct: 100,
+    reliabilityOTIF: 95,
+    leadTimeDays: 15,
+    moq: 10,
+    prodStop: 3,
+    bottleneck: 3,
+    substitutability: 3,
+    safetyQuality: 3,
+    recovery: 3
+  });
+
+  // Clear filters helper
+  const handleClearFilters = () => {
+    setSelectedCell(null);
+    setSelectedBand('All');
+    setSearchTerm('');
+    setCategoryFilter('All');
+  };
+
+  // Convert risk score to band name
+  const getBandName = (score) => {
+    const band = bandsConfig.find(b => score >= b.min && score <= b.max);
+    return band ? band.name : 'Low';
+  };
+
+  // Convert risk score to band color class
+  const getBandColor = (score) => {
+    const band = bandsConfig.find(b => score >= b.min && score <= b.max);
+    return band ? band.color : 'band-low';
+  };
+
+  // Continuous gradient color matching InventoryClassification exactly:
+  // #a82b2b (rust red, score 25) → #dbaf58 (mustard/tan, score ~12) → #3f6212 (forest olive, score 1)
+  const getScoreColor = (score, opacity = 1) => {
+    const t = Math.max(0, Math.min(1, (score - 1) / 24)); // 0 = score 1 (green), 1 = score 25 (red)
+    // 3 stops matching InventoryClassification palette
+    const stops = [
+      { pos: 0,   r: 63,  g: 98,  b: 18  }, // forest olive green (#3f6212)
+      { pos: 0.5, r: 219, g: 175, b: 88  }, // warm mustard/tan (#dbaf58)
+      { pos: 1,   r: 168, g: 43,  b: 43  }, // rust red (#a82b2b)
+    ];
+    let i = 0;
+    for (let s = 1; s < stops.length; s++) {
+      if (t <= stops[s].pos) { i = s - 1; break; }
+      if (s === stops.length - 1) i = s - 1;
+    }
+    const segT = (t - stops[i].pos) / (stops[i + 1].pos - stops[i].pos);
+    const r = Math.round(stops[i].r + segT * (stops[i + 1].r - stops[i].r));
+    const g = Math.round(stops[i].g + segT * (stops[i + 1].g - stops[i].g));
+    const b = Math.round(stops[i].b + segT * (stops[i + 1].b - stops[i].b));
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  };
+
+  // Sourcing difficulty (SDE) sub-factor calculations
+  const calculateScores = (comp) => {
+    // 1. Supplier Concentration
+    const supplyPct = Number(comp.supplyPct || 100);
+    const numSuppliers = Number(comp.numSuppliers || 1);
+    let concentration = 1;
+    if (supplyPct > 85 || numSuppliers === 1) concentration = 5;
+    else if (supplyPct > 70) concentration = 4;
+    else if (supplyPct > 50) concentration = 3;
+    else if (supplyPct >= 30) concentration = 2;
+    else concentration = 1;
+
+    // 2. Lead Time Days
+    const leadTime = Number(comp.leadTimeDays || 15);
+    let leadTimeScore = 1;
+    if (leadTime > 60) leadTimeScore = 5;
+    else if (leadTime > 30) leadTimeScore = 4;
+    else if (leadTime > 14) leadTimeScore = 3;
+    else if (leadTime > 7) leadTimeScore = 2;
+    else leadTimeScore = 1;
+
+    // 3. Reliability (OTIF %)
+    const otif = Number(comp.reliabilityOTIF || 90);
+    let reliabilityScore = 1;
+    if (otif < 60) reliabilityScore = 5;
+    else if (otif <= 75) reliabilityScore = 4;
+    else if (otif <= 85) reliabilityScore = 3;
+    else if (otif <= 95) reliabilityScore = 2;
+    else reliabilityScore = 1;
+
+    // 4. Inventory Buffer Strength
+    const doc = Number(comp.daysOfCoverage || 20);
+    const bufferRatio = leadTime > 0 ? doc / leadTime : 3.0;
+    let bufferScore = 1;
+    if (bufferRatio < 0.5) bufferScore = 5;
+    else if (bufferRatio <= 1.0) bufferScore = 4;
+    else if (bufferRatio <= 2.0) bufferScore = 3;
+    else if (bufferRatio <= 3.0) bufferScore = 2;
+    else bufferScore = 1;
+
+    // 5. MOQ Rigidity
+    const moq = Number(comp.moq || 1);
+    const roq = Number(comp.roq || 10);
+    const moqRatio = roq > 0 ? moq / roq : 1.0;
+    let moqScore = 1;
+    if (moqRatio > 2.5) moqScore = 5;
+    else if (moqRatio > 1.5) moqScore = 4;
+    else if (moqRatio > 1.0) moqScore = 3;
+    else if (moqRatio >= 0.5) moqScore = 2;
+    else moqScore = 1;
+
+    // 6. Geography risk
+    const country = comp.countryOfOrigin || 'India';
+    const geoScore = Number(countryTiers[country] || countryTiers['Other'] || 3);
+
+    // Compute SDE score (weighted and rounded to 1-5 integer)
+    const rawSDE = (
+      sdeWeights.concentration * concentration +
+      sdeWeights.leadTime * leadTimeScore +
+      sdeWeights.reliability * reliabilityScore +
+      sdeWeights.buffer * bufferScore +
+      sdeWeights.moq * moqScore +
+      sdeWeights.geography * geoScore
+    );
+    const sdeScore = Math.min(5, Math.max(1, Math.round(rawSDE)));
+
+    // Compute VED score (weighted and rounded to 1-5 integer)
+    const rawVED = (
+      vedWeights.prodStop * Number(comp.prodStop || 3) +
+      vedWeights.bottleneck * Number(comp.bottleneck || 3) +
+      vedWeights.substitutability * Number(comp.substitutability || 3) +
+      vedWeights.safetyQuality * Number(comp.safetyQuality || 3) +
+      vedWeights.recovery * Number(comp.recovery || 3)
+    );
+    const vedScore = Math.min(5, Math.max(1, Math.round(rawVED)));
+
+    const compositeScore = sdeScore * vedScore;
+    const band = getBandName(compositeScore);
+    const colorClass = getBandColor(compositeScore);
+
+    // Derived flags & stats
+    const supplierDependencyFlag = supplyPct > 80 ? 1 : 0;
+    
+    // Stockout exposure flag
+    const inHand = Number(comp.inHandInventory || 0);
+    const safetyStock = Number(comp.safetyStock || 5);
+    const inTransit = Number(comp.inTransitInventory || 0);
+    
+    const stockoutExposureFlag = (
+      inHand < safetyStock &&
+      doc < stockoutConfig.docLowDays &&
+      inTransit === 0 &&
+      leadTime > stockoutConfig.leadTimeLongDays
+    ) ? 1 : 0;
+
+    const inventoryValue = Number(comp.inventoryValue || 0);
+    const inventoryExposureValue = inventoryValue * sdeScore;
+
+    return {
+      ...comp,
+      sdeScore,
+      vedScore,
+      compositeScore,
+      band,
+      colorClass,
+      bufferRatio,
+      moqRatio,
+      supplierDependencyFlag,
+      stockoutExposureFlag,
+      inventoryExposureValue
+    };
+  };
+
+  // Run scoring calculations over all active components
+  const scoredComponents = useMemo(() => {
+    return components.map(calculateScores);
+  }, [components, sdeWeights, vedWeights, countryTiers, bandsConfig, stockoutConfig]);
+
+  // Unique categories list for filters
+  const categories = useMemo(() => {
+    return ['All', ...new Set(components.map(c => c.category))];
+  }, [components]);
+
+  // KPI band counters
+  const bandKPIs = useMemo(() => {
+    const kpis = {
+      Low: { count: 0, value: 0 },
+      Moderate: { count: 0, value: 0 },
+      High: { count: 0, value: 0 },
+      'Very High': { count: 0, value: 0 },
+      Critical: { count: 0, value: 0 }
+    };
+    scoredComponents.forEach(c => {
+      if (kpis[c.band]) {
+        kpis[c.band].count++;
+        kpis[c.band].value += convertAmount(c.inventoryValue);
+      }
+    });
+    return kpis;
+  }, [scoredComponents, convertAmount]);
+
+  // Compute 5x5 Matrix coordinates count & value mapping
+  const matrix5x5Map = useMemo(() => {
+    const grid = {};
+    for (let r = 1; r <= 5; r++) {
+      grid[r] = {};
+      for (let c = 1; c <= 5; c++) {
+        grid[r][c] = { count: 0, value: 0, items: [] };
+      }
+    }
+    scoredComponents.forEach(item => {
+      const s = item.sdeScore;
+      const v = item.vedScore;
+      if (grid[s] && grid[s][v]) {
+        grid[s][v].count++;
+        grid[s][v].value += convertAmount(item.inventoryValue);
+        grid[s][v].items.push(item);
+      }
+    });
+    return grid;
+  }, [scoredComponents, convertAmount]);
+
+  // Dynamic row heights (SDE rows 1-5) and column widths (VED columns 1-5) for 5x5 heatmap sizing
+  const colWidths = useMemo(() => {
+    if (matrixSizingMode === 'equal') {
+      return [1.0, 1.0, 1.0, 1.0, 1.0];
+    }
+    if (matrixSizingMode === 'score') {
+      return [1.0, 2.0, 3.0, 4.0, 5.0];
+    }
+    if (matrixSizingMode === 'count') {
+      const total = scoredComponents.length || 1;
+      return [1, 2, 3, 4, 5].map(v => {
+        const count = scoredComponents.filter(c => c.vedScore === v).length;
+        return 1.0 + (count / total) * 3.0;
+      });
+    }
+    const total = scoredComponents.reduce((sum, c) => sum + convertAmount(c.inventoryValue), 0) || 1;
+    return [1, 2, 3, 4, 5].map(v => {
+      const val = scoredComponents.filter(c => c.vedScore === v).reduce((sum, c) => sum + convertAmount(c.inventoryValue), 0);
+      return 1.0 + (val / total) * 3.0;
+    });
+  }, [scoredComponents, convertAmount, matrixSizingMode]);
+
+  const rowHeights = useMemo(() => {
+    if (matrixSizingMode === 'equal') {
+      return [1.0, 1.0, 1.0, 1.0, 1.0];
+    }
+    if (matrixSizingMode === 'score') {
+      return [1.0, 2.0, 3.0, 4.0, 5.0];
+    }
+    if (matrixSizingMode === 'count') {
+      const total = scoredComponents.length || 1;
+      return [1, 2, 3, 4, 5].map(s => {
+        const count = scoredComponents.filter(c => c.sdeScore === s).length;
+        return 1.0 + (count / total) * 3.0;
+      });
+    }
+    const total = scoredComponents.reduce((sum, c) => sum + convertAmount(c.inventoryValue), 0) || 1;
+    return [1, 2, 3, 4, 5].map(s => {
+      const val = scoredComponents.filter(c => c.sdeScore === s).reduce((sum, c) => sum + convertAmount(c.inventoryValue), 0);
+      return 1.0 + (val / total) * 3.0;
+    });
+  }, [scoredComponents, convertAmount, matrixSizingMode]);
+
+  // Treemap data processing
+  const treemapData = useMemo(() => {
+    if (treemapGroup === 'product') {
+      const categoryGroups = {};
+      scoredComponents.forEach(r => {
+        const val = matrixSizingMode === 'value' 
+          ? convertAmount(r.inventoryValue) 
+          : matrixSizingMode === 'count' 
+            ? 1 
+            : r.compositeScore;
+        if (val <= 0) return;
+        const cat = r.category || 'Other';
+        if (!categoryGroups[cat]) {
+          categoryGroups[cat] = { name: cat, children: [] };
+        }
+        categoryGroups[cat].children.push({
+          name: r.description,
+          erpCode: r.erpCode,
+          value: val,
+          score: r.compositeScore,
+          band: r.band,
+          colorClass: r.colorClass,
+          formattedValue: matrixSizingMode === 'value' ? formatCurrency(convertAmount(r.inventoryValue), currency) : matrixSizingMode === 'count' ? '1 component' : `${val} points`,
+          itemsCount: 1,
+          rawItem: r
+        });
+      });
+      return Object.values(categoryGroups).sort((a, b) => {
+        const valA = a.children.reduce((sum, c) => sum + c.value, 0);
+        const valB = b.children.reduce((sum, c) => sum + c.value, 0);
+        return valB - valA;
+      });
+    }
+
+    if (treemapGroup === 'category') {
+      const parentGroup = { name: 'Classified Categories', children: [] };
+      const categoryValues = {};
+      
+      scoredComponents.forEach(r => {
+        const cat = r.category || 'Other';
+        const val = matrixSizingMode === 'value' 
+          ? convertAmount(r.inventoryValue) 
+          : matrixSizingMode === 'count' 
+            ? 1 
+            : r.compositeScore;
+        if (val <= 0) return;
+        if (!categoryValues[cat]) {
+          categoryValues[cat] = { name: cat, value: 0, itemsCount: 0, scoresSum: 0, dollarsSum: 0 };
+        }
+        categoryValues[cat].value += val;
+        categoryValues[cat].itemsCount++;
+        categoryValues[cat].scoresSum += r.compositeScore;
+        categoryValues[cat].dollarsSum += convertAmount(r.inventoryValue);
+      });
+
+      parentGroup.children = Object.values(categoryValues).map(c => {
+        const avgScore = c.itemsCount > 0 ? Math.round(c.scoresSum / c.itemsCount) : 1;
+        const band = bandsConfig.find(b => avgScore >= b.min && avgScore <= b.max) || bandsConfig[0];
+        return {
+          name: c.name,
+          value: c.value,
+          score: avgScore,
+          band: band.name,
+          colorClass: band.color,
+          formattedValue: matrixSizingMode === 'value' ? formatCurrency(c.dollarsSum, currency) : `${c.itemsCount} components`,
+          itemsCount: c.itemsCount,
+          rawItem: null
+        };
+      }).filter(x => x.value > 0).sort((a, b) => b.value - a.value);
+
+      return [parentGroup];
+    }
+
+    if (treemapGroup === 'cell') {
+      const sdeGroups = {};
+      scoredComponents.forEach(r => {
+        const key = `${r.sdeScore}-${r.vedScore}`;
+        const val = matrixSizingMode === 'value' 
+          ? convertAmount(r.inventoryValue) 
+          : matrixSizingMode === 'count' 
+            ? 1 
+            : r.compositeScore;
+        if (val <= 0) return;
+
+        const parentName = `SDE ${r.sdeScore}`;
+        if (!sdeGroups[parentName]) {
+          sdeGroups[parentName] = { name: parentName, children: [] };
+        }
+        
+        let cNode = sdeGroups[parentName].children.find(c => c.cellKey === key);
+        if (!cNode) {
+          cNode = { 
+            cellKey: key,
+            name: `${r.band} Criticality (SDE ${r.sdeScore} · VED ${r.vedScore})`,
+            value: 0,
+            score: r.compositeScore,
+            band: r.band,
+            colorClass: r.colorClass,
+            itemsCount: 0,
+            dollarsSum: 0
+          };
+          sdeGroups[parentName].children.push(cNode);
+        }
+        cNode.value += val;
+        cNode.itemsCount++;
+        cNode.dollarsSum += convertAmount(r.inventoryValue);
+      });
+
+      Object.values(sdeGroups).forEach(group => {
+        group.children.forEach(c => {
+          c.formattedValue = matrixSizingMode === 'value' ? formatCurrency(c.dollarsSum, currency) : `${c.itemsCount} components`;
+        });
+        group.children = group.children.filter(c => c.value > 0);
+      });
+
+      return Object.values(sdeGroups).filter(group => group.children.length > 0);
+    }
+
+    return [];
+  }, [scoredComponents, treemapGroup, matrixSizingMode, convertAmount, currency, bandsConfig]);
+
+  const handleTreemapClick = (node) => {
+    if (!node) return;
+    
+    if (treemapGroup === 'product') {
+      setSearchTerm(prev => prev === node.erpCode ? '' : node.erpCode);
+      setSelectedCell(null);
+    } else if (treemapGroup === 'category') {
+      setCategoryFilter(prev => prev === node.name ? 'All' : node.name);
+      setSelectedCell(null);
+    } else if (treemapGroup === 'cell') {
+      if (node.cellKey) {
+        const [s, v] = node.cellKey.split('-').map(Number);
+        setSelectedCell(prev => prev && prev.sde === s && prev.ved === v ? null : { sde: s, ved: v });
+        setSearchTerm('');
+      }
+    }
+  };
+
+  // Filter components for the list table
+  const filteredComponents = useMemo(() => {
+    let result = [...scoredComponents];
+
+    if (categoryFilter !== 'All') {
+      result = result.filter(c => c.category === categoryFilter);
+    }
+
+    if (selectedBand !== 'All') {
+      result = result.filter(c => c.band === selectedBand);
+    }
+
+    if (selectedCell) {
+      result = result.filter(c => c.sdeScore === selectedCell.sde && c.vedScore === selectedCell.ved);
+    }
+
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(c => 
+        c.erpCode.toLowerCase().includes(term) ||
+        c.hsCode.toLowerCase().includes(term) ||
+        c.description.toLowerCase().includes(term) ||
+        c.supplierName.toLowerCase().includes(term)
+      );
+    }
+
+    return result;
+  }, [scoredComponents, categoryFilter, selectedBand, selectedCell, searchTerm]);
+
+  // Currency Formatter
+  const fmt = (amount) => formatCurrency(amount, currency);
+
+  // --- SETTINGS CONFIGURATION ACTIONS ---
+  const handleUpdateSdeWeight = (field, val) => {
+    setSdeWeights(prev => {
+      const updated = { ...prev, [field]: Number(val) };
+      const sum = Object.values(updated).reduce((a, b) => a + b, 0);
+      return updated;
+    });
+  };
+
+  const handleUpdateVedWeight = (field, val) => {
+    setVedWeights(prev => ({ ...prev, [field]: Number(val) }));
+  };
+
+  const handleAddCountryRisk = () => {
+    if (!newCountryName.trim()) return;
+    setCountryTiers(prev => ({
+      ...prev,
+      [newCountryName.trim()]: Number(newCountryRisk)
+    }));
+    setNewCountryName('');
+  };
+
+  const handleRemoveCountryRisk = (country) => {
+    setCountryTiers(prev => {
+      const updated = { ...prev };
+      delete updated[country];
+      return updated;
+    });
+  };
+
+  const handleResetSettings = () => {
+    setSdeWeights({
+      concentration: 0.25,
+      leadTime: 0.20,
+      reliability: 0.20,
+      buffer: 0.20,
+      moq: 0.10,
+      geography: 0.05
+    });
+    setVedWeights({
+      prodStop: 0.35,
+      bottleneck: 0.20,
+      substitutability: 0.20,
+      safetyQuality: 0.15,
+      recovery: 0.10
+    });
+    setCountryTiers(initialCountryTiers);
+    setBandsConfig([
+      { name: 'Low', min: 1, max: 4, desc: 'Standard planning; low-touch review', color: 'band-low' },
+      { name: 'Moderate', min: 5, max: 9, desc: 'Planner monitoring; monthly review', color: 'band-moderate' },
+      { name: 'High', min: 10, max: 15, desc: 'Safety stock & supplier review', color: 'band-high' },
+      { name: 'Very High', min: 16, max: 20, desc: 'Alternate source; weekly review', color: 'band-veryhigh' },
+      { name: 'Critical', min: 21, max: 25, desc: 'Executive watchlist; watchlist', color: 'band-critical' }
+    ]);
+  };
+
+  // --- MANUAL COMPONENT FORM ACTIONS ---
+  const handleFormChange = (field, val) => {
+    setManualInput(prev => ({ ...prev, [field]: val }));
+  };
+
+  const handleFormSubmit = (e) => {
+    e.preventDefault();
+    if (!manualInput.erpCode.trim() || !manualInput.description.trim()) {
+      alert("Please provide both ERP Code and Description.");
+      return;
+    }
+
+    const newComponent = {
+      ...manualInput,
+      inHandInventory: Number(manualInput.inHandInventory || 0),
+      inventoryValue: Number(manualInput.inventoryValue || 0),
+      inTransitInventory: Number(manualInput.inTransitInventory || 0),
+      daysOfCoverage: Number(manualInput.daysOfCoverage || 20),
+      roq: Number(manualInput.roq || 10),
+      safetyStock: Number(manualInput.safetyStock || 5),
+      supplyPct: Number(manualInput.supplyPct || 100),
+      reliabilityOTIF: Number(manualInput.reliabilityOTIF || 90),
+      leadTimeDays: Number(manualInput.leadTimeDays || 15),
+      moq: Number(manualInput.moq || 1),
+      isCustom: true
+    };
+
+    setComponents(prev => {
+      // Check if updating existing erpCode
+      const idx = prev.findIndex(c => c.erpCode === newComponent.erpCode);
+      if (idx > -1) {
+        const copy = [...prev];
+        copy[idx] = newComponent;
+        return copy;
+      }
+      return [newComponent, ...prev];
+    });
+
+    // Reset input fields
+    setManualInput({
+      erpCode: '',
+      hsCode: '',
+      category: 'Engine',
+      description: '',
+      inHandInventory: 50,
+      inventoryValue: 10000,
+      inTransitInventory: 0,
+      daysOfCoverage: 30,
+      roq: 100,
+      safetyStock: 10,
+      supplierCode: 'SUP0001',
+      supplierName: 'New Supplier',
+      countryOfOrigin: 'India',
+      supplyPct: 100,
+      reliabilityOTIF: 95,
+      leadTimeDays: 15,
+      moq: 10,
+      prodStop: 3,
+      bottleneck: 3,
+      substitutability: 3,
+      safetyQuality: 3,
+      recovery: 3
+    });
+    setEditingComponent(null);
+  };
+
+  const handleEditClick = (comp) => {
+    setEditingComponent(comp.erpCode);
+    setManualInput(comp);
+    setActiveTab('manual');
+  };
+
+  const handleDeleteClick = (erpCode) => {
+    if (confirm(`Are you sure you want to delete component ${erpCode}?`)) {
+      setComponents(prev => prev.filter(c => c.erpCode !== erpCode));
+    }
+  };
+
+  // --- CSV UPLOAD/EXPORT ACTIONS ---
+  const handleCSVUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = evt.target.result;
+      const lines = text.split(/\r?\n/);
+      if (lines.length <= 1) return;
+
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const parsedData = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        for (let j = 0; j < line.length; j++) {
+          const char = line[j];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            values.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        values.push(current.trim());
+
+        const row = {};
+        headers.forEach((header, index) => {
+          let val = values[index] || '';
+          val = val.replace(/^"|"$/g, '');
+          row[header] = val;
+        });
+
+        if (row.erpCode) {
+          parsedData.push({
+            erpCode: row.erpCode,
+            hsCode: row.hsCode || '851220',
+            category: row.category || 'Electrical',
+            description: row.description || 'Uploaded Component',
+            inHandInventory: Number(row.inHandInventory || 0),
+            inventoryValue: Number(row.inventoryValue || 0),
+            inTransitInventory: Number(row.inTransitInventory || 0),
+            daysOfCoverage: Number(row.daysOfCoverage || 30),
+            roq: Number(row.roq || 100),
+            safetyStock: Number(row.safetyStock || 10),
+            supplierCode: row.supplierCode || 'SUP-UP',
+            supplierName: row.supplierName || 'Uploaded Supplier',
+            countryOfOrigin: row.countryOfOrigin || 'India',
+            supplyPct: Number(row.supplyPct || 100),
+            reliabilityOTIF: Number(row.reliabilityOTIF || 90),
+            leadTimeDays: Number(row.leadTimeDays || 15),
+            moq: Number(row.moq || 1),
+            prodStop: Number(row.prodStop || 3),
+            bottleneck: Number(row.bottleneck || 3),
+            substitutability: Number(row.substitutability || 3),
+            safetyQuality: Number(row.safetyQuality || 3),
+            recovery: Number(row.recovery || 3),
+            isCustom: true
+          });
+        }
+      }
+
+      if (parsedData.length > 0) {
+        setComponents(prev => {
+          // Merge uploaded items (overwrite duplicates by erpCode)
+          const merged = [...prev];
+          parsedData.forEach(newComp => {
+            const idx = merged.findIndex(c => c.erpCode === newComp.erpCode);
+            if (idx > -1) {
+              merged[idx] = newComp;
+            } else {
+              merged.unshift(newComp);
+            }
+          });
+          return merged;
+        });
+        alert(`Successfully imported ${parsedData.length} components!`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleDownloadTemplate = () => {
+    const headers = [
+      'erpCode', 'hsCode', 'category', 'description', 'inHandInventory', 'inventoryValue',
+      'inTransitInventory', 'daysOfCoverage', 'roq', 'safetyStock', 'supplierCode', 
+      'supplierName', 'countryOfOrigin', 'supplyPct', 'reliabilityOTIF', 'leadTimeDays', 'moq',
+      'prodStop', 'bottleneck', 'substitutability', 'safetyQuality', 'recovery'
+    ];
+    
+    const sampleRow = [
+      'PRD0101', '851220', 'Electrical', 'Rear tail light module', '50', '25000',
+      '20', '45', '100', '10', 'SUP0101',
+      'AutoLamps Ltd', 'Germany', '100', '96', '14', '5',
+      '3', '3', '2', '4', '2'
+    ];
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + [headers.join(','), sampleRow.join(',')].join('\n');
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "SDE_VED_Criticality_Template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportScoredCSV = () => {
+    const headers = [
+      'ERP Code', 'HS Code', 'Category', 'Description', 'In-Hand Inventory', 'Inventory Value',
+      'In-Transit Inventory', 'Days of Cover', 'ROQ', 'Safety Stock', 'SDE Score', 'VED Score',
+      'Composite Score', 'Criticality Band', 'Buffer-to-Lead-Time Ratio', 'MOQ Stress Ratio',
+      'Supplier Dependency Flag', 'Stockout Exposure Flag', 'Inventory Exposure Value'
+    ];
+    
+    const rows = filteredComponents.map(item => [
+      item.erpCode,
+      item.hsCode,
+      item.category,
+      `"${item.description.replace(/"/g, '""')}"`,
+      item.inHandInventory,
+      item.inventoryValue,
+      item.inTransitInventory,
+      item.daysOfCoverage,
+      item.roq,
+      item.safetyStock,
+      item.sdeScore,
+      item.vedScore,
+      item.compositeScore,
+      item.band,
+      item.bufferRatio.toFixed(2),
+      item.moqRatio.toFixed(2),
+      item.supplierDependencyFlag,
+      item.stockoutExposureFlag,
+      item.inventoryExposureValue.toFixed(2)
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "Scored_Inventory_Criticality.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      
+      {/* CARD HEADER WITH SETTINGS ICON */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          Score supply chain risk on SDE (Procurement difficulty) & VED (Stoppage criticality). Range: 1–25.
+        </div>
+        <button 
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          className={`btn ${settingsOpen ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Settings2 size={15} />
+          {settingsOpen ? 'Hide Configuration' : 'Scoring Parameter Settings'}
+        </button>
+      </div>
+
+      {/* COLLAPSIBLE CONFIGURATION PANEL */}
+      {settingsOpen && (
+        <div className="glass-card animate-scale-in" style={{ padding: '20px', border: '1px solid var(--border-medium)', background: 'var(--bg-tertiary)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '12px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '15px', fontWeight: 700, color: 'var(--text-bright)' }}>
+              <Sliders size={18} className="text-accent" />
+              Dynamic Weight & Threshold Configurations
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={handleResetSettings}>
+              <RefreshCw size={12} style={{ marginRight: '6px' }} />
+              Reset Defaults
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px' }}>
+            {/* SDE Weights */}
+            <div>
+              <div style={{ fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '10px' }}>SDE procurement difficulty sub-factors weights (Sum: 1.0)</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  { key: 'concentration', label: 'Supplier Concentration (25%)' },
+                  { key: 'leadTime', label: 'Lead Time (20%)' },
+                  { key: 'reliability', label: 'Reliability/OTIF (20%)' },
+                  { key: 'buffer', label: 'Buffer Ratio (20%)' },
+                  { key: 'moq', label: 'MOQ Rigidity (10%)' },
+                  { key: 'geography', label: 'Geography Risk (5%)' }
+                ].map(w => (
+                  <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{w.label}</span>
+                    <input 
+                      type="range" min="0" max="0.5" step="0.05" 
+                      value={sdeWeights[w.key]} 
+                      onChange={(e) => handleUpdateSdeWeight(w.key, e.target.value)} 
+                      style={{ width: '100px', accentColor: 'var(--accent-primary)' }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* VED Weights */}
+            <div>
+              <div style={{ fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '10px' }}>VED production criticality sub-factors weights (Sum: 1.0)</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  { key: 'prodStop', label: 'Line Stoppage (35%)' },
+                  { key: 'bottleneck', label: 'Bottleneck Dep (20%)' },
+                  { key: 'substitutability', label: 'Substitutability (20%)' },
+                  { key: 'safetyQuality', label: 'Safety & Quality (15%)' },
+                  { key: 'recovery', label: 'Recovery Time (10%)' }
+                ].map(w => (
+                  <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{w.label}</span>
+                    <input 
+                      type="range" min="0" max="0.5" step="0.05" 
+                      value={vedWeights[w.key]} 
+                      onChange={(e) => handleUpdateVedWeight(w.key, e.target.value)} 
+                      style={{ width: '100px', accentColor: 'var(--accent-primary)' }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Country Tiers Editor */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '8px' }}>
+                <MapPin size={14} />
+                Country Risk Tier mappings
+              </div>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                <input 
+                  type="text" placeholder="Country name" className="form-input form-input-sm" style={{ flex: 1 }}
+                  value={newCountryName} onChange={e => setNewCountryName(e.target.value)}
+                />
+                <select 
+                  className="form-input form-input-sm" style={{ width: '60px' }}
+                  value={newCountryRisk} onChange={e => setNewCountryRisk(Number(e.target.value))}
+                >
+                  {[1,2,3,4,5].map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <button className="btn btn-primary btn-sm" onClick={handleAddCountryRisk}>Add</button>
+              </div>
+              
+              <div className="custom-scrollbar" style={{ maxHeight: '110px', overflowY: 'auto', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '6px' }}>
+                {Object.entries(countryTiers).map(([c, risk]) => (
+                  <div key={c} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 4px', fontSize: '11.5px', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                    <span>{c} <span style={{ color: 'var(--text-muted)' }}>(Risk: {risk})</span></span>
+                    {c !== 'Other' && (
+                      <button style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }} onClick={() => handleRemoveCountryRisk(c)}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DYNAMIC KPI SUMMARY CARDS */}
+      <div className="kpi-grid stagger-children">
+        {bandsConfig.map(band => {
+          const kpi = bandKPIs[band.name] || { count: 0, value: 0 };
+          return (
+            <div 
+              key={band.name} 
+              onClick={() => setSelectedBand(prev => prev === band.name ? 'All' : band.name)}
+              className={`kpi-card animate-scale-in clickable ${selectedBand === band.name ? 'active border-primary' : ''}`}
+              style={{ borderLeft: `4px solid ${getScoreColor(Math.round((band.min + band.max) / 2))}` }}
+            >
+              <div className="kpi-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>{band.name} Risk</span>
+                <span style={{ fontSize: '9px', textTransform: 'uppercase', background: getScoreColor(Math.round((band.min + band.max) / 2), 0.2), color: getScoreColor(Math.round((band.min + band.max) / 2)), padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>{band.min}-{band.max}</span>
+              </div>
+              <div className="kpi-value" style={{ fontSize: '20px' }}>
+                {kpi.count} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>items</span>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--success)', fontWeight: 650, marginTop: '2px' }}>
+                {fmt(kpi.value)} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>locked</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* TWO-COLUMN GRID: 5X5 MATRIX VS INPUT FORM */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.6fr', gap: '20px', alignItems: 'stretch' }}>
+        
+        {/* Left Side: 5x5 Heatmap Matrix Card */}
+        <div className="glass-card animate-slide-up" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+            <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Layers size={18} className="icon" />
+              {viewMode === 'treemap' ? 'Sourcing & Criticality Treemap View' : '5×5 SDE-VED Composite Criticality Matrix'}
+            </div>
+            
+            {/* View Mode Switcher Pills */}
+            <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => setViewMode('treemap')}
+                className={`tab ${viewMode === 'treemap' ? 'active' : ''}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  border: 'none',
+                  borderRadius: 'var(--radius-sm)',
+                  background: viewMode === 'treemap' ? 'var(--accent-gradient)' : 'transparent',
+                  color: viewMode === 'treemap' ? 'white' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontFamily: "'Inter', sans-serif"
+                }}
+              >
+                Treemap View
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('matrix')}
+                className={`tab ${viewMode === 'matrix' ? 'active' : ''}`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  border: 'none',
+                  borderRadius: 'var(--radius-sm)',
+                  background: viewMode === 'matrix' ? 'var(--accent-gradient)' : 'transparent',
+                  color: viewMode === 'matrix' ? 'white' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontFamily: "'Inter', sans-serif"
+                }}
+              >
+                5x5 Matrix Grid
+              </button>
+            </div>
+          </div>
+          
+          {/* Conditional Subtitle & Grouping Filters */}
+          {viewMode === 'treemap' ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Click tiles to filter table. Tile size represents {matrixSizingMode === 'value' ? 'inventory cash value' : matrixSizingMode === 'count' ? 'number of components' : 'VED * SDE composite score'}.
+              </div>
+              
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Sizing pill */}
+                <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Size:</span>
+                  {['score', 'value', 'count'].map(sz => (
+                    <button
+                      key={sz}
+                      type="button"
+                      onClick={() => setMatrixSizingMode(sz)}
+                      className={`tab ${matrixSizingMode === sz ? 'active' : ''}`}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        border: 'none',
+                        borderRadius: 'var(--radius-sm)',
+                        background: matrixSizingMode === sz ? 'var(--accent-gradient)' : 'transparent',
+                        color: matrixSizingMode === sz ? 'white' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontFamily: "'Inter', sans-serif"
+                      }}
+                    >
+                      {sz === 'score' ? 'Score' : sz === 'value' ? 'Value' : 'Count'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Grouping pill */}
+                <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Group:</span>
+                  {['product', 'category', 'cell'].map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setTreemapGroup(g)}
+                      className={`tab ${treemapGroup === g ? 'active' : ''}`}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        border: 'none',
+                        borderRadius: 'var(--radius-sm)',
+                        background: treemapGroup === g ? 'var(--text-primary)' : 'transparent',
+                        color: treemapGroup === g ? 'var(--bg-primary)' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontFamily: "'Inter', sans-serif"
+                      }}
+                    >
+                      {g === 'product' ? 'Products' : g === 'category' ? 'Categories' : 'SDE-VED'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                SDE procurement difficulty (rows); VED plant criticality (columns). {matrixSizingMode === 'score' ? 'Sizing is determined geometrically by SDE * VED composite scores.' : matrixSizingMode === 'value' ? 'Sizing is proportional to inventory cash value.' : matrixSizingMode === 'count' ? 'Sizing is proportional to component count.' : 'Sizing is equal.'}
+              </div>
+              
+              {/* Sizing Mode Switcher */}
+              <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                {['score', 'value', 'count', 'equal'].map(sz => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => setMatrixSizingMode(sz)}
+                    className={`tab ${matrixSizingMode === sz ? 'active' : ''}`}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      border: 'none',
+                      borderRadius: 'var(--radius-sm)',
+                      background: matrixSizingMode === sz ? 'var(--accent-gradient)' : 'transparent',
+                      color: matrixSizingMode === sz ? 'white' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      fontFamily: "'Inter', sans-serif"
+                    }}
+                    title={sz === 'score' ? 'Sizing is determined geometrically by SDE * VED scores' : sz === 'value' ? 'Scale matrix cells proportionally by locked-up inventory value' : sz === 'count' ? 'Scale matrix cells proportionally by component count' : 'Traditional equal-sized 5x5 cells'}
+                  >
+                    {sz === 'score' ? 'SDE*VED Score' : sz === 'value' ? 'Value' : sz === 'count' ? 'Count' : 'Equal'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative' }}>
+            {viewMode === 'treemap' ? (
+              <div 
+                style={{ 
+                  position: 'relative', 
+                  width: '100%', 
+                  height: '380px', 
+                  flex: 1, 
+                  minHeight: '380px'
+                }}
+              >
+                <div
+                  ref={containerRef}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    overflow: 'hidden',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-subtle)',
+                    position: 'relative'
+                  }}
+                >
+                  {(() => {
+                    const leafNodes = [];
+                    treemapData.forEach(parent => {
+                      if (parent.children) {
+                        parent.children.forEach(child => {
+                          leafNodes.push(child);
+                        });
+                      } else {
+                        leafNodes.push(parent);
+                      }
+                    });
+
+                    const layoutCards = computeTreemapLayout(
+                      leafNodes.sort((a, b) => b.value - a.value),
+                      0,
+                      0,
+                      dimensions.width,
+                      dimensions.height
+                    );
+
+                    return layoutCards.map((card, idx) => {
+                      return (
+                        <div
+                          key={card.erpCode || card.name || idx}
+                          onClick={() => handleTreemapClick(card)}
+                          onMouseEnter={() => setHoveredCard(card)}
+                          onMouseMove={(e) => {
+                            const rect = e.currentTarget.parentElement.getBoundingClientRect();
+                            setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                          }}
+                          onMouseLeave={() => setHoveredCard(null)}
+                          style={{
+                            position: 'absolute',
+                            left: `${card.x}px`,
+                            top: `${card.y}px`,
+                            width: `${card.w}px`,
+                            height: `${card.h}px`,
+                            padding: '6px',
+                            boxSizing: 'border-box',
+                            background: getScoreColor(card.score || 1),
+                            color: '#ffffff',
+                            border: document.documentElement.classList.contains('light-theme') ? '2px solid #ffffff' : '2px solid var(--bg-secondary)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            overflow: 'hidden',
+                            transition: 'transform 0.15s ease-out, filter 0.15s ease-out',
+                            textShadow: '0 1px 2px rgba(0, 0, 0, 0.4)',
+                            textAlign: 'center',
+                            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+                            letterSpacing: '-0.01em'
+                          }}
+                          className="treemap-rect"
+                        >
+                          {/* Name */}
+                          <div
+                            style={{
+                              fontWeight: 500,
+                              fontSize: card.w > 120 ? '13px' : card.w > 80 ? '11px' : '9.5px',
+                              lineHeight: 1.25,
+                              textAlign: 'center',
+                              width: '100%',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              display: '-webkit-box',
+                              WebkitLineClamp: card.h > 60 ? 3 : 2,
+                              WebkitBoxOrient: 'vertical',
+                              marginBottom: '3px',
+                              pointerEvents: 'none',
+                              letterSpacing: '0.01em'
+                            }}
+                          >
+                            {card.name}
+                          </div>
+                          
+                          {/* Value */}
+                          {card.h > 45 && (
+                            <div
+                              style={{
+                                fontWeight: 400,
+                                fontSize: card.w > 120 ? '12px' : card.w > 80 ? '10.5px' : '9px',
+                                opacity: 0.9,
+                                textAlign: 'center',
+                                pointerEvents: 'none',
+                                letterSpacing: '0'
+                              }}
+                            >
+                              {card.formattedValue}
+                            </div>
+                          )}
+
+                          {/* Info Badge */}
+                          {card.w > 95 && card.h > 70 && (
+                            <div
+                              style={{
+                                fontSize: '8px',
+                                fontWeight: 500,
+                                marginTop: '6px',
+                                background: 'rgba(0, 0, 0, 0.2)',
+                                padding: '2px 6px',
+                                borderRadius: '3px',
+                                letterSpacing: '0.8px',
+                                textTransform: 'uppercase',
+                                pointerEvents: 'none',
+                                border: '1px solid rgba(255, 255, 255, 0.12)'
+                              }}
+                            >
+                              {card.erpCode || `${card.band} Band`}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {/* Cursor-Following Glassmorphic Tooltip */}
+                {hoveredCard && (
+                  <div 
+                    className="glass-card animate-scale-in" 
+                    style={{ 
+                      position: 'absolute',
+                      left: `${mousePos.x > dimensions.width - 250 ? mousePos.x - 240 - 15 : mousePos.x + 15}px`,
+                      top: `${mousePos.y > dimensions.height - 250 ? mousePos.y - 230 - 15 : mousePos.y + 15}px`,
+                      zIndex: 10000,
+                      padding: '14px', 
+                      border: '1px solid var(--border-strong)', 
+                      background: 'var(--bg-secondary)', 
+                      boxShadow: 'var(--shadow-xl)',
+                      borderRadius: 'var(--radius-md)',
+                      width: '240px',
+                      pointerEvents: 'none',
+                      backdropFilter: 'blur(12px)',
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '13px', marginBottom: '4px' }}>
+                      {hoveredCard.name}
+                    </div>
+                    
+                    {hoveredCard.erpCode ? (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: '8px' }}>
+                        ERP: {hoveredCard.erpCode} · Segment: {hoveredCard.band}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '8px' }}>
+                        Segment: {treemapGroup === 'category' ? 'Product Category' : 'SDE-VED Cell'}
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Weighted Rating:</span>
+                        <span style={{ fontWeight: 700, color: getScoreColor(hoveredCard.score || 1) }}>
+                          {hoveredCard.score} points
+                        </span>
+                      </div>
+                      
+                      {hoveredCard.rawItem && (
+                        <>
+                          <div style={{ fontSize: '11.5px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Inventory Value:</span>
+                            <span style={{ fontWeight: 700, color: 'var(--success)' }}>{formatCurrency(convertAmount(hoveredCard.rawItem.inventoryValue), currency)}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>SDE * VED Rating:</span>
+                            <span style={{ fontWeight: 700, color: 'var(--text-accent)' }}>{hoveredCard.rawItem.sdeScore} * {hoveredCard.rawItem.vedScore} ({hoveredCard.rawItem.compositeScore})</span>
+                          </div>
+                          <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Lead Time:</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{hoveredCard.rawItem.leadTimeDays} days</span>
+                          </div>
+                          <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Supplier Reliability:</span>
+                            <span style={{ fontWeight: 600, color: 'var(--success)' }}>{hoveredCard.rawItem.reliabilityOTIF}% OTIF</span>
+                          </div>
+                          <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>In-Hand / Safety:</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{hoveredCard.rawItem.inHandInventory} / {hoveredCard.rawItem.safetyStock}</span>
+                          </div>
+                        </>
+                      )}
+
+                      {!hoveredCard.rawItem && (
+                        <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>Components:</span>
+                          <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>{hoveredCard.itemsCount} items</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div 
+                className="matrix-5x5-grid"
+                style={{
+                  gridTemplateColumns: `50px ${colWidths.map(w => `${w}fr`).join(' ')}`,
+                  gridTemplateRows: `40px ${rowHeights.map(h => `${h}fr`).join(' ')}`,
+                  transition: 'grid-template-columns 0.4s cubic-bezier(0.16, 1, 0.3, 1), grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+                }}
+              >
+                {/* Header Corner Spacer */}
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '9.5px', fontWeight: 700 }}>
+                  <span>SDE ↓</span>
+                  <span>VED →</span>
+                </div>
+                
+                {/* X-Axis labels (VED Columns) */}
+                {[1, 2, 3, 4, 5].map(v => (
+                  <div key={v} className="matrix-5x5-label-row" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    VED {v}
+                  </div>
+                ))}
+
+                {/* Rows */}
+                {[1, 2, 3, 4, 5].map(sdeScore => (
+                  <>
+                    {/* Y-Axis Label */}
+                    <div key={`sde-${sdeScore}`} className="matrix-5x5-label-col" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      SDE {sdeScore}
+                    </div>
+                    
+                    {/* Matrix cells */}
+                    {[1, 2, 3, 4, 5].map(vedScore => {
+                      const score = sdeScore * vedScore;
+                      const band = bandsConfig.find(b => score >= b.min && score <= b.max) || bandsConfig[0];
+                      const stats = matrix5x5Map[sdeScore]?.[vedScore] || { count: 0, value: 0 };
+                      const isSelected = selectedCell && selectedCell.sde === sdeScore && selectedCell.ved === vedScore;
+
+                      return (
+                        <div
+                          key={`${sdeScore}-${vedScore}`}
+                          onClick={() => setSelectedCell(prev => prev && prev.sde === sdeScore && prev.ved === vedScore ? null : { sde: sdeScore, ved: vedScore })}
+                          className={`matrix-5x5-cell ${isSelected ? 'selected' : ''}`}
+                          style={{
+                            background: getScoreColor(score),
+                            color: '#ffffff',
+                            borderColor: 'rgba(255,255,255,0.15)',
+                            textShadow: '0 1.5px 3px rgba(0, 0, 0, 0.85)'
+                          }}
+                        >
+                          {/* Static Content (Score and Short Band label - Always Visible) */}
+                          <div className="default-content">
+                            <span style={{ fontWeight: 800, fontSize: '13px' }}>{score}</span>
+                            <span style={{ fontWeight: 650, fontSize: '9px', textTransform: 'uppercase', opacity: 0.85 }}>
+                              {band.name === 'Very High' ? 'V.High' : band.name === 'Moderate' ? 'Mod.' : band.name}
+                            </span>
+                          </div>
+
+                          {/* Hover Content (Only Visible on Hover) */}
+                          <div className="hover-content">
+                            <span style={{ fontWeight: 800, fontSize: '11px', color: '#fff' }}>{stats.count} components</span>
+                            <span style={{ fontSize: '9px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                              {stats.value > 0 ? fmt(stats.value) : '$0'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Bottom Scale/Gradient Legend (Styled to match InventoryClassification EXACTLY) */}
+          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px', padding: '12px 16px 8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>SDE * VED Sourcing Risk Scale (Gradient Legend)</span>
+              <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Proportional Size By {matrixSizingMode === 'value' ? 'Value' : matrixSizingMode === 'count' ? 'Count' : matrixSizingMode === 'score' ? 'Score' : 'Equal'}</span>
+            </div>
+            <div style={{ position: 'relative', height: '14px', borderRadius: '4px', background: 'linear-gradient(90deg, #a82b2b 0%, #dbaf58 50%, #3f6212 100%)', border: '1px solid var(--border-medium)' }}>
+              {/* Visual scale ticks */}
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '20%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '40%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '60%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '80%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 2px 0', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, fontFamily: 'monospace' }}>
+              <div style={{ textAlign: 'left' }}>
+                <span style={{ color: 'var(--danger)', fontSize: '11px', fontWeight: 750 }}>25.0</span>
+                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--danger)', marginTop: '2px' }}>CRITICAL RISK</div>
+              </div>
+              <div style={{ textAlign: 'center', transform: 'translateX(-10px)' }}>
+                <span>15.0</span>
+                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>HIGH</div>
+              </div>
+              <div style={{ textAlign: 'center', transform: 'translateX(10px)' }}>
+                <span>6.0</span>
+                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>MEDIUM</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{ color: 'var(--success)', fontSize: '11px', fontWeight: 750 }}>1.0</span>
+                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--success)', marginTop: '2px' }}>LOW RISK</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Side: Manual input form and CSV bulk upload */}
+        <div className="glass-card animate-slide-up" style={{ display: 'flex', flexDirection: 'column' }}>
+          
+          {/* Tabs */}
+          <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', marginBottom: '14px' }}>
+            <button 
+              onClick={() => setActiveTab('upload')}
+              className={`tab ${activeTab === 'upload' ? 'active' : ''}`}
+              style={{ flex: 1, padding: '6px', fontSize: '12px', borderRadius: 'var(--radius-sm)', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px' }}
+            >
+              <Upload size={14} />
+              CSV Bulk Import
+            </button>
+            <button 
+              onClick={() => setActiveTab('manual')}
+              className={`tab ${activeTab === 'manual' ? 'active' : ''}`}
+              style={{ flex: 1, padding: '6px', fontSize: '12px', borderRadius: 'var(--radius-sm)', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px' }}
+            >
+              <Plus size={14} />
+              {editingComponent ? 'Edit Component' : 'Manual Component Entry'}
+            </button>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            {/* Tab 1: CSV Upload */}
+            {activeTab === 'upload' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', justifyContent: 'center', height: '100%' }}>
+                <div style={{ border: '2px dashed var(--border-strong)', borderRadius: 'var(--radius-md)', padding: '24px 16px', textAlign: 'center', background: 'rgba(255,255,255,0.01)', transition: 'border-color 0.2s', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                  <FileSpreadsheet size={40} className="text-accent" style={{ opacity: 0.8 }} />
+                  <div>
+                    <div style={{ fontWeight: 650, fontSize: '13.5px', color: 'var(--text-bright)' }}>Bulk Load Component Database</div>
+                    <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '4px' }}>Upload a CSV master to instantly compute all SDE & VED criticality values.</div>
+                  </div>
+                  <label className="btn btn-secondary btn-sm clickable" style={{ cursor: 'pointer', marginTop: '6px' }}>
+                    <Upload size={13} style={{ marginRight: '6px' }} />
+                    Choose Scored CSV file
+                    <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display: 'none' }} />
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Download Sample Excel / CSV Templates:</div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary btn-sm" onClick={handleDownloadTemplate} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '11.5px' }}>
+                      <Download size={13} />
+                      Download Empty Template
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab 2: Manual Component Entry */}
+            {activeTab === 'manual' && (
+              <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div>
+                    <label className="form-label">ERP Code</label>
+                    <input 
+                      type="text" placeholder="e.g. PRD0101" className="form-input form-input-sm" required
+                      value={manualInput.erpCode} onChange={e => handleFormChange('erpCode', e.target.value)}
+                      disabled={!!editingComponent}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">HS Code</label>
+                    <input 
+                      type="text" placeholder="e.g. 870899" className="form-input form-input-sm"
+                      value={manualInput.hsCode} onChange={e => handleFormChange('hsCode', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '8px' }}>
+                  <div>
+                    <label className="form-label">Category</label>
+                    <select 
+                      className="form-input form-input-sm"
+                      value={manualInput.category} onChange={e => handleFormChange('category', e.target.value)}
+                    >
+                      {['Engine', 'Transmission', 'Drivetrain', 'Brakes', 'Suspension & Steering', 'Wheels & Tires', 'Electrical', 'Fuel System', 'HVAC', 'Other'].map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label">Description</label>
+                    <input 
+                      type="text" placeholder="Part description..." className="form-input form-input-sm" required
+                      value={manualInput.description} onChange={e => handleFormChange('description', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                  <div>
+                    <label className="form-label" style={{ fontSize: '10px' }}>In-Hand Qty</label>
+                    <input 
+                      type="number" className="form-input form-input-sm" min="0"
+                      value={manualInput.inHandInventory} onChange={e => handleFormChange('inHandInventory', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ fontSize: '10px' }}>Days Cover</label>
+                    <input 
+                      type="number" className="form-input form-input-sm" min="0"
+                      value={manualInput.daysOfCoverage} onChange={e => handleFormChange('daysOfCoverage', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ fontSize: '10px' }}>Safety Stock</label>
+                    <input 
+                      type="number" className="form-input form-input-sm" min="0"
+                      value={manualInput.safetyStock} onChange={e => handleFormChange('safetyStock', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', marginTop: '4px' }}>
+                  <div style={{ fontWeight: 650, fontSize: '12px', color: 'var(--text-accent)', marginBottom: '8px' }}>Manual Production VED Sub-Factors Rating (1–5)</div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {[
+                      { key: 'prodStop', label: vedMeta.prodStop.label, desc: vedMeta.prodStop.desc },
+                      { key: 'bottleneck', label: vedMeta.bottleneck.label, desc: vedMeta.bottleneck.desc },
+                      { key: 'substitutability', label: vedMeta.substitutability.label, desc: vedMeta.substitutability.desc },
+                      { key: 'safetyQuality', label: vedMeta.safetyQuality.label, desc: vedMeta.safetyQuality.desc },
+                      { key: 'recovery', label: vedMeta.recovery.label, desc: vedMeta.recovery.desc }
+                    ].map(f => (
+                      <div key={f.key} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.8fr', gap: '8px', alignItems: 'center' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }} title={f.desc}>{f.label}</div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          {[1,2,3,4,5].map(v => (
+                            <button
+                              key={v} type="button"
+                              onClick={() => handleFormChange(f.key, v)}
+                              className={`btn btn-sm`}
+                              style={{ 
+                                flex: 1, padding: '3px 0', fontSize: '10.5px',
+                                background: manualInput[f.key] === v ? 'var(--accent-primary)' : 'rgba(255,255,255,0.02)',
+                                color: manualInput[f.key] === v ? 'white' : 'var(--text-secondary)',
+                                border: manualInput[f.key] === v ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)'
+                              }}
+                            >
+                              {v}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                  <button type="submit" className="btn btn-primary btn-sm" style={{ flex: 1 }}>
+                    {editingComponent ? 'Update Scored Component' : 'Submit & Calculate Score'}
+                  </button>
+                  {editingComponent && (
+                    <button 
+                      type="button" className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        setEditingComponent(null);
+                        setManualInput({
+                          erpCode: '', hsCode: '', category: 'Engine', description: '',
+                          inHandInventory: 50, inventoryValue: 10000, inTransitInventory: 0,
+                          daysOfCoverage: 30, roq: 100, safetyStock: 10, supplierCode: 'SUP0001',
+                          supplierName: 'New Supplier', countryOfOrigin: 'India', supplyPct: 100,
+                          reliabilityOTIF: 95, leadTimeDays: 15, moq: 10, prodStop: 3,
+                          bottleneck: 3, substitutability: 3, safetyQuality: 3, recovery: 3
+                        });
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* DETAILED TABLE LIST OF COMPONENTS */}
+      <div className="glass-card animate-slide-up">
+        
+        {/* Table Filters & Searches */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <FileSpreadsheet size={18} className="icon" />
+            Classified Components & Derived Parameters ({filteredComponents.length} items)
+            {(selectedCell || selectedBand !== 'All' || categoryFilter !== 'All' || searchTerm) && (
+              <span className="badge info" style={{ fontSize: '10.5px', padding: '1px 5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Filter size={10} /> Active Filters
+              </span>
+            )}
+          </div>
+
+          <div className="custom-scrollbar" style={{ display: 'flex', gap: '8px', alignItems: 'center', overflowX: 'auto', maxWidth: '100%', paddingBottom: '4px' }}>
+            {/* Category Dropdown */}
+            <select 
+              className="form-input form-input-sm" style={{ minWidth: '150px', width: 'auto', margin: 0 }}
+              value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+            >
+              {categories.map(cat => <option key={cat} value={cat}>{cat === 'All' ? 'All Categories' : cat}</option>)}
+            </select>
+
+            <button className="btn btn-secondary btn-sm" onClick={handleExportScoredCSV}>
+              <Download size={13} style={{ marginRight: '6px' }} />
+              Export CSV Output
+            </button>
+
+            {(selectedCell || selectedBand !== 'All' || categoryFilter !== 'All' || searchTerm) && (
+              <button className="btn btn-secondary btn-sm btn-danger" onClick={handleClearFilters}>
+                Reset Filter
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Real-time search */}
+        <input 
+          type="text" placeholder="Search components by ERP code, HS code, supplier, or description..."
+          className="form-input form-input-sm" style={{ marginBottom: '12px' }}
+          value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+        />
+
+        {/* Scored Data Table */}
+        <div className="data-table-container" style={{ maxHeight: '350px', overflow: 'auto' }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>ERP Code</th>
+                <th>Category</th>
+                <th>Description</th>
+                <th>SDE Score</th>
+                <th>VED Score</th>
+                <th>Composite</th>
+                <th>Band</th>
+                <th>Stockout Flag</th>
+                <th>Inv Value</th>
+                <th>Exposure Value</th>
+                <th style={{ textAlign: 'center' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredComponents.map(comp => (
+                <tr key={comp.erpCode} style={{ cursor: 'pointer' }} onClick={() => handleEditClick(comp)}>
+                  <td style={{ fontWeight: 650, fontFamily: 'monospace' }}>{comp.erpCode}</td>
+                  <td><span className="badge neutral">{comp.category}</span></td>
+                  <td style={{ fontWeight: 500, fontSize: '12.5px' }} title={comp.description}>{comp.description}</td>
+                  
+                  {/* Scores */}
+                  <td style={{ fontWeight: 700 }}>{comp.sdeScore} <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>/ 5</span></td>
+                  <td style={{ fontWeight: 700 }}>{comp.vedScore} <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>/ 5</span></td>
+                  <td style={{ fontWeight: 800 }}>{comp.compositeScore} <span style={{ fontSize: '10px', color: 'var(--text-accent)' }}>/ 25</span></td>
+                  
+                  {/* Band */}
+                  <td><span className={`badge ${comp.colorClass}`}>{comp.band}</span></td>
+                  
+                  {/* Stockout Flag */}
+                  <td style={{ textAlign: 'center' }}>
+                    {comp.stockoutExposureFlag === 1 ? (
+                      <span className="badge critical" style={{ fontSize: '10px', fontWeight: 850 }}>RISK OUT</span>
+                    ) : (
+                      <span className="badge success" style={{ fontSize: '10px', opacity: 0.6 }}>OK</span>
+                    )}
+                  </td>
+                  
+                  {/* Values */}
+                  <td style={{ fontWeight: 650, color: 'var(--success)' }}>{fmt(convertAmount(comp.inventoryValue))}</td>
+                  <td style={{ fontWeight: 750, color: 'var(--success)' }}>{fmt(convertAmount(comp.inventoryExposureValue))}</td>
+                  
+                  {/* Actions */}
+                  <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => handleEditClick(comp)} style={{ padding: '3px 6px' }} title="Edit Manual VED factors">
+                        <Edit3 size={11} />
+                      </button>
+                      {comp.isCustom && (
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleDeleteClick(comp.erpCode)} style={{ padding: '3px 6px', color: 'var(--danger)' }} title="Delete component">
+                          <Trash2 size={11} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredComponents.length === 0 && (
+                <tr>
+                  <td colSpan={11} style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--text-muted)' }}>
+                    No component scoring records found matching active filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
