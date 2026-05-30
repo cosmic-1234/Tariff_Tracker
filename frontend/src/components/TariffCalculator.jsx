@@ -18,7 +18,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
   const [suppliers, setSuppliers] = useState([]);
   const [supplierInputs, setSupplierInputs] = useState([]);
   const [showScenario, setShowScenario] = useState(false);
-  const [liveSuggestion, setLiveSuggestion] = useState(null);
+  const [liveSuggestions, setLiveSuggestions] = useState([]);
   const [isSearchingApi, setIsSearchingApi] = useState(false);
 
   // Scenario state
@@ -35,7 +35,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
     setHsCode(value);
     setCalcResult(null);
     setShowScenario(false);
-    setLiveSuggestion(null);
+    setLiveSuggestions([]);
 
     // Try to find product by HS code
     const product = getProductByHSCode(value);
@@ -90,13 +90,13 @@ export default function TariffCalculator({ currency, convertAmount }) {
         });
       }
 
-      // Fetch live suggestion for autocomplete recommendations
+      // Fetch live suggestions for autocomplete recommendations
       if (cleaned.length === 2 || cleaned.length === 4 || cleaned.length === 6) {
         setIsSearchingApi(true);
-        getHSCodesRecommendation(cleaned).then(rec => {
+        getHSCodesRecommendation(cleaned).then(recs => {
           setIsSearchingApi(false);
-          if (rec) {
-            setLiveSuggestion(rec);
+          if (recs) {
+            setLiveSuggestions(recs);
           }
         }).catch(() => setIsSearchingApi(false));
       }
@@ -202,7 +202,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
               onFocus={() => setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
             />
-            {showSuggestions && (filteredProducts.length > 0 || liveSuggestion || isSearchingApi) && (
+            {showSuggestions && (filteredProducts.length > 0 || liveSuggestions.length > 0 || isSearchingApi) && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--bg-secondary)', border: '1px solid var(--border-medium)',
@@ -215,8 +215,9 @@ export default function TariffCalculator({ currency, convertAmount }) {
                     <span>Querying WCO Trade Tariff...</span>
                   </div>
                 )}
-                {liveSuggestion && (
+                {liveSuggestions.map((rec, index) => (
                   <div
+                    key={`live-rec-${index}`}
                     style={{
                       padding: '10px 14px', cursor: 'pointer', borderBottom: '2px solid var(--border-medium)',
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -225,9 +226,9 @@ export default function TariffCalculator({ currency, convertAmount }) {
                     className="sidebar-nav-item"
                     onMouseDown={() => {
                       const customProduct = {
-                        hsCode: liveSuggestion.hsCode,
+                        hsCode: rec.hsCode,
                         erpCode: 'CUSTOM_PRD',
-                        description: liveSuggestion.description,
+                        description: rec.description,
                         category: 'Other Parts',
                         daysOfCoverage: 30,
                         inHandInventory: 10,
@@ -241,7 +242,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
                         { supplierId: 'SUP_CUST_A', supplierName: 'Global Supplier A', country: 'Germany', region: 'EU', countryCode: 'DE', defaultTransport: 'Ship/Ocean', supplyPct: 100, leadTimeDays: 14, reliability: 95 },
                         { supplierId: 'SUP_CUST_B', supplierName: 'Global Supplier B', country: 'China', region: 'Asia', countryCode: 'CN', defaultTransport: 'Ship/Ocean', supplyPct: 0, leadTimeDays: 21, reliability: 90 },
                       ];
-                      setHsCode(liveSuggestion.hsCode);
+                      setHsCode(rec.hsCode);
                       setSelectedProduct(customProduct);
                       setSuppliers(customSuppliers);
                       setSupplierInputs(customSuppliers.map(s => ({
@@ -250,19 +251,19 @@ export default function TariffCalculator({ currency, convertAmount }) {
                         numberOfUnits: '',
                         transportMode: s.defaultTransport,
                       })));
-                      setLiveSuggestion(null);
+                      setLiveSuggestions([]);
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-accent)' }}>
+                      <div style={{ fontWeight: 700, fontSize: '12px', color: 'var(--text-accent)' }}>
                         🌐 Live WCO Code Recommendation
                       </div>
-                      <div style={{ fontWeight: 600, fontSize: '13px', marginTop: '2px' }}>{liveSuggestion.description}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>HS {liveSuggestion.hsCode} · {liveSuggestion.type} level</div>
+                      <div style={{ fontWeight: 600, fontSize: '13px', marginTop: '2px' }}>{rec.description}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>HS {rec.hsCode} · {rec.type} level</div>
                     </div>
-                    <span className="badge info">{liveSuggestion.type}</span>
+                    <span className="badge info">{rec.type}</span>
                   </div>
-                )}
+                ))}
                 {filteredProducts.map(p => (
                   <div
                     key={p.erpCode}
@@ -273,7 +274,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
                     className="sidebar-nav-item"
                     onMouseDown={() => {
                       handleProductSelect(p);
-                      setLiveSuggestion(null);
+                      setLiveSuggestions([]);
                     }}
                   >
                     <div>

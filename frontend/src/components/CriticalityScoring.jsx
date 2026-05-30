@@ -248,7 +248,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     safetyQuality: 3,
   });
 
-  const [manualRec, setManualRec] = useState(null);
+  const [manualRecs, setManualRecs] = useState([]);
   const [isManualRecLoading, setIsManualRecLoading] = useState(false);
   const [showManualRec, setShowManualRec] = useState(false);
 
@@ -733,7 +733,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     if (field === 'hsCode') {
       const cleaned = String(val).replace(/[^0-9]/g, '');
       if (cleaned.length === 0) {
-        setManualRec(null);
+        setManualRecs([]);
         setShowManualRec(false);
       }
       
@@ -750,19 +750,19 @@ export default function CriticalityScoring({ currency, convertAmount }) {
       if (cleaned.length === 2 || cleaned.length === 4 || cleaned.length === 6) {
         setIsManualRecLoading(true);
         setShowManualRec(true);
-        getHSCodesRecommendation(cleaned).then(rec => {
+        getHSCodesRecommendation(cleaned).then(recs => {
           setIsManualRecLoading(false);
-          if (rec) {
-            setManualRec(rec);
+          if (recs) {
+            setManualRecs(recs);
           } else {
-            setManualRec(null);
+            setManualRecs([]);
           }
         }).catch(() => {
           setIsManualRecLoading(false);
-          setManualRec(null);
+          setManualRecs([]);
         });
       } else {
-        setManualRec(null);
+        setManualRecs([]);
         setShowManualRec(false);
       }
     }
@@ -1694,12 +1694,12 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                       }}
                       onBlur={() => setTimeout(() => setShowManualRec(false), 250)}
                     />
-                    {showManualRec && (manualRec || isManualRecLoading) && (
+                    {showManualRec && (manualRecs.length > 0 || isManualRecLoading) && (
                       <div style={{
                         position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000,
                         background: 'var(--bg-secondary)', border: '1px solid var(--border-strong)',
                         borderRadius: 'var(--radius-sm)', padding: '4px',
-                        boxShadow: 'var(--shadow-lg)', width: '280px',
+                        boxShadow: 'var(--shadow-lg)', width: '280px', maxHeight: '200px', overflowY: 'auto',
                       }}>
                         {isManualRecLoading && (
                           <div style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1707,35 +1707,38 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                             <span>Querying recommendations...</span>
                           </div>
                         )}
-                        {manualRec && (
+                        {manualRecs.map((rec, index) => (
                           <div
+                            key={`manual-rec-${index}`}
                             style={{
                               padding: '8px 10px', cursor: 'pointer', borderRadius: '4px',
                               background: 'var(--accent-gradient-subtle)',
                               display: 'flex', flexDirection: 'column', gap: '2px',
+                              marginBottom: index < manualRecs.length - 1 ? '4px' : '0',
+                              borderBottom: index < manualRecs.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                             }}
                             className="sidebar-nav-item"
                             onMouseDown={() => {
                               setManualInput(prev => ({
                                 ...prev,
-                                hsCode: manualRec.hsCode,
-                                description: manualRec.description
+                                hsCode: rec.hsCode,
+                                description: rec.description
                               }));
-                              setManualRec(null);
+                              setManualRecs([]);
                               setShowManualRec(false);
                             }}
                           >
-                            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-accent)' }}>
+                            <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-accent)' }}>
                               💡 Dynamic API Recommendation
                             </span>
                             <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-bright)' }}>
-                              HS {manualRec.hsCode} · {manualRec.type}
+                              HS {rec.hsCode} · {rec.type}
                             </span>
                             <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                              {manualRec.description}
+                              {rec.description}
                             </span>
                           </div>
-                        )}
+                        ))}
                       </div>
                     )}
                   </div>
