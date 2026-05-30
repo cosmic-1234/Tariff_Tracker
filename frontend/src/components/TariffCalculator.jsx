@@ -872,7 +872,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
           }}
         >
           <Calculator size={18} />
-          <span>Calculate Landed Cost</span>
+          <span>Calculate</span>
         </button>
       )}
     </div>
