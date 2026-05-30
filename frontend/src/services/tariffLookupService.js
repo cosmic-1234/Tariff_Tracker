@@ -36,3 +36,55 @@ export async function lookupHSCodeDescription(hsCode) {
     return null;
   }
 }
+
+/**
+ * Get HS Code recommendations based on input query (works for 2-digit chapter and 4-digit heading initials)
+ * @param {string} query - input numbers
+ * @returns {Promise<{hsCode: string, description: string, type: string}|null>}
+ */
+export async function getHSCodesRecommendation(query) {
+  if (!query) return null;
+  const cleaned = String(query).replace(/[^0-9]/g, '');
+  if (cleaned.length < 2) return null;
+
+  try {
+    if (cleaned.length === 2) {
+      const response = await fetch(`https://trade-tariff.service.gov.uk/api/v2/chapters/${cleaned}`, {
+        headers: { 'Accept': 'application/vnd.uktt.v2' }
+      });
+      if (!response.ok) throw new Error();
+      const payload = await response.json();
+      if (payload && payload.data && payload.data.attributes) {
+        const desc = payload.data.attributes.description;
+        if (desc) {
+          return {
+            hsCode: cleaned,
+            description: desc.replace(/<[^>]*>/g, '').trim(),
+            type: 'Chapter'
+          };
+        }
+      }
+    } else if (cleaned.length >= 4) {
+      const prefix = cleaned.substring(0, 4);
+      const response = await fetch(`https://trade-tariff.service.gov.uk/api/v2/headings/${prefix}`, {
+        headers: { 'Accept': 'application/vnd.uktt.v2' }
+      });
+      if (!response.ok) throw new Error();
+      const payload = await response.json();
+      if (payload && payload.data && payload.data.attributes) {
+        const desc = payload.data.attributes.description;
+        if (desc) {
+          return {
+            hsCode: prefix,
+            description: desc.replace(/<[^>]*>/g, '').trim(),
+            type: 'Heading'
+          };
+        }
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+

@@ -6,7 +6,7 @@ import {
 import { productMaster } from '../data/productMaster.js';
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
-import { lookupHSCodeDescription } from '../services/tariffLookupService.js';
+import { lookupHSCodeDescription, getHSCodesRecommendation } from '../services/tariffLookupService.js';
 
 // Pre-defined fallback default VED sub-factors for the 30 base components
 function getDefaultVedSubFactors(category) {
@@ -246,8 +246,12 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     bottleneck: 3,
     substitutability: 3,
     safetyQuality: 3,
-    recovery: 3
   });
+
+  const [manualRec, setManualRec] = useState(null);
+  const [isManualRecLoading, setIsManualRecLoading] = useState(false);
+  const [showManualRec, setShowManualRec] = useState(false);
+
 
   // Clear filters helper
   const handleClearFilters = () => {
@@ -723,12 +727,16 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     ]);
   };
 
-  // --- MANUAL COMPONENT FORM ACTIONS ---
   const handleFormChange = async (field, val) => {
     setManualInput(prev => ({ ...prev, [field]: val }));
     
     if (field === 'hsCode') {
       const cleaned = String(val).replace(/[^0-9]/g, '');
+      if (cleaned.length === 0) {
+        setManualRec(null);
+        setShowManualRec(false);
+      }
+      
       if (cleaned.length === 4 || cleaned.length === 6) {
         const liveDesc = await lookupHSCodeDescription(cleaned);
         if (liveDesc) {
@@ -737,6 +745,25 @@ export default function CriticalityScoring({ currency, convertAmount }) {
             description: liveDesc
           }));
         }
+      }
+
+      if (cleaned.length === 2 || cleaned.length === 4 || cleaned.length === 6) {
+        setIsManualRecLoading(true);
+        setShowManualRec(true);
+        getHSCodesRecommendation(cleaned).then(rec => {
+          setIsManualRecLoading(false);
+          if (rec) {
+            setManualRec(rec);
+          } else {
+            setManualRec(null);
+          }
+        }).catch(() => {
+          setIsManualRecLoading(false);
+          setManualRec(null);
+        });
+      } else {
+        setManualRec(null);
+        setShowManualRec(false);
       }
     }
   };
@@ -1654,12 +1681,63 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                       disabled={!!editingComponent}
                     />
                   </div>
-                  <div>
+                  <div style={{ position: 'relative' }}>
                     <label className="form-label">HS Code</label>
                     <input 
                       type="text" placeholder="e.g. 870899" className="form-input form-input-sm"
-                      value={manualInput.hsCode} onChange={e => handleFormChange('hsCode', e.target.value)}
+                      value={manualInput.hsCode} 
+                      onChange={e => handleFormChange('hsCode', e.target.value)}
+                      onFocus={() => {
+                        if (manualInput.hsCode.length >= 2) {
+                          setShowManualRec(true);
+                        }
+                      }}
+                      onBlur={() => setTimeout(() => setShowManualRec(false), 250)}
                     />
+                    {showManualRec && (manualRec || isManualRecLoading) && (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000,
+                        background: 'var(--bg-secondary)', border: '1px solid var(--border-strong)',
+                        borderRadius: 'var(--radius-sm)', padding: '4px',
+                        boxShadow: 'var(--shadow-lg)', width: '280px',
+                      }}>
+                        {isManualRecLoading && (
+                          <div style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span className="animate-pulse">🌐</span>
+                            <span>Querying recommendations...</span>
+                          </div>
+                        )}
+                        {manualRec && (
+                          <div
+                            style={{
+                              padding: '8px 10px', cursor: 'pointer', borderRadius: '4px',
+                              background: 'var(--accent-gradient-subtle)',
+                              display: 'flex', flexDirection: 'column', gap: '2px',
+                            }}
+                            className="sidebar-nav-item"
+                            onMouseDown={() => {
+                              setManualInput(prev => ({
+                                ...prev,
+                                hsCode: manualRec.hsCode,
+                                description: manualRec.description
+                              }));
+                              setManualRec(null);
+                              setShowManualRec(false);
+                            }}
+                          >
+                            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-accent)' }}>
+                              💡 Dynamic API Recommendation
+                            </span>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-bright)' }}>
+                              HS {manualRec.hsCode} · {manualRec.type}
+                            </span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                              {manualRec.description}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
