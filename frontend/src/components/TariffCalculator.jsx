@@ -833,6 +833,48 @@ export default function TariffCalculator({ currency, convertAmount }) {
           </div>
         </div>
       )}
+
+      {/* Floating Calculate Button */}
+      {selectedProduct && suppliers.length > 0 && (
+        <button
+          className={`btn btn-primary ${(!calcResult && supplierInputs.some(s => s.fob)) ? 'animate-pulse' : ''}`}
+          onClick={handleCalculate}
+          disabled={supplierInputs.every(s => !s.fob)}
+          style={{
+            position: 'fixed',
+            bottom: '32px',
+            right: '32px',
+            zIndex: 1000,
+            padding: '14px 28px',
+            borderRadius: '50px',
+            boxShadow: 'var(--accent-glow), 0 10px 30px rgba(0, 0, 0, 0.3)',
+            background: 'var(--accent-gradient)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '15px',
+            fontWeight: 600,
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            transition: 'transform 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease',
+            cursor: 'pointer',
+            opacity: supplierInputs.every(s => !s.fob) ? 0.6 : 1,
+            transform: 'scale(1)',
+          }}
+          onMouseEnter={e => {
+            if (!supplierInputs.every(s => !s.fob)) {
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 0 30px rgba(102, 126, 234, 0.6), 0 12px 40px rgba(0, 0, 0, 0.4)';
+            }
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.transform = 'scale(1)';
+            e.currentTarget.style.boxShadow = 'var(--accent-glow), 0 10px 30px rgba(0, 0, 0, 0.3)';
+          }}
+        >
+          <Calculator size={18} />
+          <span>Calculate Landed Cost</span>
+        </button>
+      )}
     </div>
   );
 }
