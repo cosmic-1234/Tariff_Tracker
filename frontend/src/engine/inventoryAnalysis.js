@@ -1,6 +1,7 @@
 // SDE & VED Inventory Sourcing & Criticality Analysis Engine
 import { productMaster } from '../data/productMaster.js';
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
+import { calculateRiskScore } from './riskScoringModel.js';
 
 /**
  * Calculates SDE (Scarce, Difficult, Easy) rating for a product's sourcing difficulty.
@@ -74,7 +75,7 @@ export function getVedClassification(category, daysOfCoverage) {
 /**
  * Returns classified product inventory records with risk analysis.
  */
-export function getInventoryRiskRecords() {
+export function getInventoryRiskRecords(config = {}) {
   return productMaster.map(product => {
     const suppliers = getSuppliersForProduct(product.erpCode);
     const maxLeadTime = suppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
@@ -88,6 +89,9 @@ export function getInventoryRiskRecords() {
     if (riskValue >= 15) riskLevel = 'Critical';
     else if (riskValue >= 6) riskLevel = 'Medium';
 
+    // Calculate advanced 0-100 Risk Scores
+    const advancedRisk = calculateRiskScore(product, suppliers, config);
+
     return {
       ...product,
       maxLeadTime,
@@ -98,7 +102,16 @@ export function getInventoryRiskRecords() {
       vedClass: ved.classification,
       riskValue,
       riskLevel,
-      suppliers
+      suppliers,
+      
+      // Advanced 0-100 Risk Scoring Model integration
+      subScores: advancedRisk.subScores,
+      rawMetrics: advancedRisk.rawMetrics,
+      scoreA: advancedRisk.scoreA,
+      scoreB: advancedRisk.scoreB,
+      scoreFinal: advancedRisk.scoreFinal,
+      hasOverride: advancedRisk.hasOverride,
+      riskBand: advancedRisk.riskBand
     };
   });
 }
@@ -106,13 +119,14 @@ export function getInventoryRiskRecords() {
 /**
  * Generates aggregated metrics for SDE & VED cash valuations.
  */
-export function getRiskSummary() {
-  const records = getInventoryRiskRecords();
+export function getRiskSummary(config = {}) {
+  const records = getInventoryRiskRecords(config);
   const totalValue = records.reduce((sum, r) => sum + r.inventoryValue, 0);
 
   const riskSegments = {
     Critical: { count: 0, value: 0 },
-    Medium: { count: 0, value: 0 },
+    High: { count: 0, value: 0 },
+    Moderate: { count: 0, value: 0 },
     Low: { count: 0, value: 0 }
   };
 
@@ -129,8 +143,17 @@ export function getRiskSummary() {
   };
 
   records.forEach(r => {
-    riskSegments[r.riskLevel].count++;
-    riskSegments[r.riskLevel].value += r.inventoryValue;
+    // Increment according to 0-100 final risk score bands
+    const band = r.riskBand;
+    if (riskSegments[band]) {
+      riskSegments[band].count++;
+      riskSegments[band].value += r.inventoryValue;
+    } else {
+      // Fallback to legacy categories for count safety
+      const legacyBand = r.riskLevel === 'Critical' ? 'Critical' : r.riskLevel === 'Medium' ? 'Moderate' : 'Low';
+      riskSegments[legacyBand].count++;
+      riskSegments[legacyBand].value += r.inventoryValue;
+    }
 
     sdeSegments[r.sdeClass].count++;
     sdeSegments[r.sdeClass].value += r.inventoryValue;
@@ -144,6 +167,6 @@ export function getRiskSummary() {
     riskSegments,
     sdeSegments,
     vedSegments,
-    avgRiskScore: records.reduce((sum, r) => sum + r.riskValue, 0) / records.length
+    avgRiskScore: records.reduce((sum, r) => sum + r.scoreFinal, 0) / records.length
   };
 }

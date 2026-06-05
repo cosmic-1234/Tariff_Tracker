@@ -74,16 +74,6 @@ export default function ProductMaster({ onNavigate, currency, convertAmount }) {
           <div className="kpi-label">Total Inventory Value</div>
           <div className="kpi-value small">{fmt(productMaster.reduce((s, p) => s + p.inventoryValue, 0))}</div>
         </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Avg Days of Coverage</div>
-          <div className="kpi-value">{Math.round(productMaster.reduce((s, p) => s + p.daysOfCoverage, 0) / productMaster.length)}</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Critical Items</div>
-          <div className="kpi-value" style={{ color: 'var(--danger)' }}>
-            {productMaster.filter(p => getInventoryCriticality(p.daysOfCoverage) === 'Critical').length}
-          </div>
-        </div>
       </div>
 
       <div className="glass-card">
@@ -150,7 +140,7 @@ export default function ProductMaster({ onNavigate, currency, convertAmount }) {
                 <th>ROQ</th>
                 <th>Review</th>
                 <th>Safety Stock</th>
-                <th>Status</th>
+                <th>Inventory Level</th>
                 <th>Suppliers</th>
               </tr>
             </thead>

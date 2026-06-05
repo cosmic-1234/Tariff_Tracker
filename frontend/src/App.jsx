@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import Sidebar from './components/Sidebar.jsx';
-import Header from './components/Header.jsx';
+import Navbar from './components/Navbar.jsx';
 import Dashboard from './components/Dashboard.jsx';
 import TariffCalculator from './components/TariffCalculator.jsx';
 import CriticalityScoring from './components/CriticalityScoring.jsx';
 import InventoryClassification from './components/InventoryClassification.jsx';
+import RiskEngine from './components/RiskEngine.jsx';
 import ProductMaster from './components/ProductMaster.jsx';
 import MasterDataView from './components/MasterDataView.jsx';
 import { fetchExchangeRates } from './services/exchangeRateService.js';
@@ -13,11 +13,12 @@ import { countries } from './data/masterData.js';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [currency, setCurrency] = useState('USD');
+  const [currency, setCurrency]       = useState('USD');
   const [exchangeRates, setExchangeRates] = useState(null);
-  const [rateSource, setRateSource] = useState('');
-  const [theme, setTheme] = useState(() => localStorage.getItem('tariff_tracker_theme') || 'dark');
+  const [rateSource, setRateSource]   = useState('');
+  const [theme, setTheme]             = useState(
+    () => localStorage.getItem('tariff_tracker_theme') || 'dark'
+  );
   const [countriesList, setCountriesList] = useState(countries);
 
   // Sync theme to root element
@@ -56,12 +57,13 @@ function App() {
   }, [exchangeRates, currency]);
 
   const pageTitle = {
-    dashboard: 'Dashboard',
-    calculator: 'Tariff Calculator',
-    scoring: 'SDE-VED Criticality Scoring Tool',
+    dashboard:    'Dashboard',
+    calculator:   'Tariff Calculator',
+    scoring:      'SDE-VED Criticality Scoring Tool',
     classification: 'Inventory Risk Analysis (SDE/VED)',
-    products: 'Product Master',
-    masterdata: 'Master Data',
+    riskengine:   'Risk Engine',
+    products:     'Product Master',
+    masterdata:   'Master Data',
   };
 
   const renderPage = () => {
@@ -74,6 +76,8 @@ function App() {
         return <CriticalityScoring currency={currency} convertAmount={convertAmount} />;
       case 'classification':
         return <InventoryClassification currency={currency} convertAmount={convertAmount} />;
+      case 'riskengine':
+        return <RiskEngine currency={currency} convertAmount={convertAmount} />;
       case 'products':
         return <ProductMaster onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} />;
       case 'masterdata':
@@ -84,28 +88,33 @@ function App() {
   };
 
   return (
-    <div className="app-layout">
-      <Sidebar
+    <div className={`tm-app-layout ${theme}`}>
+      <Navbar
         currentPage={currentPage}
         onNavigate={setCurrentPage}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        currency={currency}
+        onCurrencyChange={setCurrency}
+        exchangeRates={exchangeRates}
+        rateSource={rateSource}
+        theme={theme}
+        onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
       />
-      <div className={`main-content ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-        <Header
-          title={pageTitle[currentPage] || 'Dashboard'}
-          sidebarCollapsed={sidebarCollapsed}
-          currency={currency}
-          onCurrencyChange={setCurrency}
-          exchangeRates={exchangeRates}
-          rateSource={rateSource}
-          theme={theme}
-          onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-        />
-        <div className="page-wrapper">
+      <main className="tm-main-content" id="main-content" tabIndex={-1}>
+        {/* Page Title Bar */}
+        <div className="tm-page-titlebar">
+          <div className="tm-page-titlebar-inner">
+            <h1 className="tm-page-title">{pageTitle[currentPage] || 'Dashboard'}</h1>
+            <div className="tm-breadcrumb">
+              <span>Tariff Tracker</span>
+              <span className="tm-breadcrumb-sep">›</span>
+              <span className="tm-breadcrumb-current">{pageTitle[currentPage] || 'Dashboard'}</span>
+            </div>
+          </div>
+        </div>
+        <div className="tm-page-wrapper">
           {renderPage()}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

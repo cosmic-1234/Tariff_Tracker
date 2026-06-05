@@ -22,13 +22,15 @@ export function runScenario(baseResult, scenarioParams) {
   const currentTariffPct = baseResult.tariffPct;
   const newTariffPct = Math.max(0, currentTariffPct * (1 + tariffChangePct / 100));
 
-  // Recalculate with new tariff (insurance, freight, other duties stay same)
+  // Recalculate with new tariff (insurance, freight, other duties, variable cost stay same)
   const tariffValue = fob * (newTariffPct / 100);
   const insuranceValue = fob * (baseResult.insurancePct / 100);
   const freightValue = fob * (baseResult.freightPct / 100);
   const otherDutiesValue = fob * (baseResult.otherDutiesPct / 100);
+  const variableCostPct = baseResult.variableCostPct || 0;
+  const variableCostValue = fob * (variableCostPct / 100);
 
-  const newTotalCost = fob + tariffValue + insuranceValue + freightValue + otherDutiesValue;
+  const newTotalCost = fob + tariffValue + insuranceValue + freightValue + otherDutiesValue + variableCostValue;
   const newCostPerUnit = units > 0 ? newTotalCost / units : 0;
 
   // Impact calculations
@@ -58,6 +60,8 @@ export function runScenario(baseResult, scenarioParams) {
     freightValue,
     otherDutiesPct: baseResult.otherDutiesPct,
     otherDutiesValue,
+    variableCostPct,
+    variableCostValue,
 
     // Final results
     newTotalCost,

@@ -1,10 +1,10 @@
-import { LayoutDashboard, Calculator, Package, Database, ChevronLeft, ChevronRight, Layers, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Calculator, Package, Database, ChevronLeft, ChevronRight, ShieldAlert, Activity } from 'lucide-react';
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Overview' },
   { id: 'calculator', label: 'Tariff Calculator', icon: Calculator, section: 'Tools' },
   { id: 'scoring', label: 'Criticality Scoring', icon: ShieldAlert, section: 'Tools' },
-  { id: 'classification', label: 'Inventory Risk (SDE/VED)', icon: Layers, section: 'Risk Analysis' },
+  { id: 'riskengine', label: 'Risk Engine', icon: Activity, section: 'Tools' },
   { id: 'products', label: 'Product Master', icon: Package, section: 'Data' },
   { id: 'masterdata', label: 'Master Data', icon: Database, section: 'Data' },
 ];

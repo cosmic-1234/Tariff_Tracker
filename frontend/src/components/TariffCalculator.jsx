@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Search, Calculator, ArrowRight, AlertTriangle, Info, MapPin, Ship, Plane, Train, TrendingUp, TrendingDown, ChevronDown, ChevronUp } from 'lucide-react';
 import { productMaster, getProductByHSCode, getProductByERPCode, getInventoryCriticality } from '../data/productMaster.js';
 import { getSuppliersForProduct, getSupplierCountries } from '../data/supplierMaster.js';
@@ -10,6 +10,22 @@ import { lookupHSCodeDescription, getHSCodesRecommendation } from '../services/t
 
 const TRANSPORT_ICONS = { 'Ship/Ocean': Ship, 'Air': Plane, 'Train': Train };
 
+const getInitialSupplierInputs = (product, suppliers) => {
+  const inventoryVal = parseFloat(product?.inventoryValue) || 0;
+  const inHand = parseInt(product?.inHandInventory) || 0;
+  const unitCost = (inventoryVal > 0 && inHand > 0) ? (inventoryVal / inHand) : 11;
+  return suppliers.map(s => {
+    const moq = s.moq || 1;
+    return {
+      supplierId: s.supplierId,
+      fob: moq * unitCost,
+      numberOfUnits: moq,
+      moqMultiplier: 1,
+      transportMode: s.defaultTransport,
+    };
+  });
+};
+
 export default function TariffCalculator({ currency, convertAmount }) {
   // ── State ──
   const [hsCode, setHsCode] = useState('');
@@ -20,6 +36,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
   const [showScenario, setShowScenario] = useState(false);
   const [liveSuggestions, setLiveSuggestions] = useState([]);
   const [isSearchingApi, setIsSearchingApi] = useState(false);
+  const [calcResult, setCalcResult] = useState(null);
 
   // Scenario state
   const [scenarioIncreasePct, setScenarioIncreasePct] = useState(25);
@@ -43,12 +60,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
       setSelectedProduct(product);
       const productSuppliers = getSuppliersForProduct(product.erpCode);
       setSuppliers(productSuppliers);
-      setSupplierInputs(productSuppliers.map(s => ({
-        supplierId: s.supplierId,
-        fob: '',
-        numberOfUnits: '',
-        transportMode: s.defaultTransport,
-      })));
+      setSupplierInputs(getInitialSupplierInputs(product, productSuppliers));
     } else {
       setSelectedProduct(null);
       setSuppliers([]);
@@ -80,12 +92,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
             
             setSelectedProduct(customProduct);
             setSuppliers(customSuppliers);
-            setSupplierInputs(customSuppliers.map(s => ({
-              supplierId: s.supplierId,
-              fob: '',
-              numberOfUnits: '',
-              transportMode: s.defaultTransport,
-            })));
+            setSupplierInputs(getInitialSupplierInputs(customProduct, customSuppliers));
           }
         });
       }
@@ -110,12 +117,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
     setShowScenario(false);
     const productSuppliers = getSuppliersForProduct(product.erpCode);
     setSuppliers(productSuppliers);
-    setSupplierInputs(productSuppliers.map(s => ({
-      supplierId: s.supplierId,
-      fob: '',
-      numberOfUnits: '',
-      transportMode: s.defaultTransport,
-    })));
+    setSupplierInputs(getInitialSupplierInputs(product, productSuppliers));
   }, []);
 
   // ── Supplier Input Updates ──
@@ -126,6 +128,43 @@ export default function TariffCalculator({ currency, convertAmount }) {
       return updated;
     });
   }, []);
+
+  // Auto-recalculate in real-time when inputs change if we've already done an initial calculation
+  useEffect(() => {
+    if (calcResult && selectedProduct && supplierInputs.length > 0) {
+      const result = calculateTariff(hsCode, destinationCountry, supplierInputs);
+      setCalcResult(result);
+    }
+  }, [supplierInputs, hsCode, destinationCountry, selectedProduct]);
+
+  // Handler for custom overrides from the breakdown card
+  const handleOverrideChange = useCallback((supplierIndex, field, value, isRate) => {
+    setSupplierInputs(prev => {
+      const updated = [...prev];
+      const input = { ...updated[supplierIndex] };
+      const parsed = parseFloat(value);
+      const fob = parseFloat(input.fob) || 0;
+
+      if (field === 'fob') {
+        input.fob = isNaN(parsed) ? '' : parsed;
+      } else if (isRate) {
+        // Percentage override
+        const key = `${field}Override`;
+        input[key] = isNaN(parsed) ? undefined : parsed;
+      } else {
+        // Dollar value override -> backward calculate the percentage
+        const key = `${field}Override`;
+        if (isNaN(parsed) || fob <= 0) {
+          input[key] = undefined;
+        } else {
+          input[key] = (parsed / fob) * 100;
+        }
+      }
+
+      updated[supplierIndex] = input;
+      return updated;
+    });
+  }, [calcResult]);
 
   // ── Calculate ──
   const handleCalculate = useCallback(() => {
@@ -245,12 +284,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
                       setHsCode(rec.hsCode);
                       setSelectedProduct(customProduct);
                       setSuppliers(customSuppliers);
-                      setSupplierInputs(customSuppliers.map(s => ({
-                        supplierId: s.supplierId,
-                        fob: '',
-                        numberOfUnits: '',
-                        transportMode: s.defaultTransport,
-                      })));
+                      setSupplierInputs(getInitialSupplierInputs(customProduct, customSuppliers));
                       setLiveSuggestions([]);
                     }}
                   >
@@ -331,6 +365,10 @@ export default function TariffCalculator({ currency, convertAmount }) {
               <div className="supplier-detail-row">
                 <span className="supplier-detail-label">HS Code</span>
                 <span className="supplier-detail-value" style={{ fontFamily: 'monospace', fontSize: '15px' }}>{selectedProduct.hsCode}</span>
+              </div>
+              <div className="supplier-detail-row">
+                <span className="supplier-detail-label">ERP Code</span>
+                <span className="supplier-detail-value" style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>{selectedProduct.erpCode}</span>
               </div>
               <div className="supplier-detail-row">
                 <span className="supplier-detail-label">Product Description</span>
@@ -427,16 +465,21 @@ export default function TariffCalculator({ currency, convertAmount }) {
 
                   {/* Manual inputs */}
                   <div className="form-group">
-                    <label className="form-label" style={{ color: 'var(--success)' }}>$ FOB Price (Manual Entry)</label>
+                    <label className="form-label" style={{ color: 'var(--success)', opacity: 0.85 }}>$ FOB Price (Auto-calculated)</label>
                     <div className="form-input-with-icon">
-                      <span className="input-icon" style={{ color: 'var(--success)' }}>$</span>
+                      <span className="input-icon" style={{ color: 'var(--success)', opacity: 0.7 }}>$</span>
                       <input
                         type="number"
                         className="form-input"
-                        placeholder="Enter FOB price..."
+                        placeholder="FOB price..."
                         value={supplierInputs[idx]?.fob || ''}
-                        onChange={e => updateSupplierInput(idx, 'fob', e.target.value)}
-                        style={{ borderColor: 'rgba(16,185,129,0.3)' }}
+                        readOnly={true}
+                        style={{ 
+                          borderColor: 'rgba(16,185,129,0.15)',
+                          background: 'var(--bg-tertiary)',
+                          color: 'var(--text-muted)',
+                          cursor: 'not-allowed'
+                        }}
                       />
                     </div>
                   </div>
@@ -455,14 +498,41 @@ export default function TariffCalculator({ currency, convertAmount }) {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Number of Units</label>
+                    <label className="form-label">MOQ Multiplier (MOQ: {supplier.moq || 1})</label>
                     <input
                       type="number"
                       className="form-input"
-                      placeholder="Enter quantity..."
-                      value={supplierInputs[idx]?.numberOfUnits || ''}
-                      onChange={e => updateSupplierInput(idx, 'numberOfUnits', e.target.value)}
+                      placeholder="Enter multiplier..."
+                      value={supplierInputs[idx]?.moqMultiplier !== undefined ? supplierInputs[idx].moqMultiplier : 1}
+                      onChange={e => {
+                        const mStr = e.target.value;
+                        const parsedM = parseInt(mStr);
+                        const moq = supplier.moq || 1;
+                        
+                        // Calculate units and FOB
+                        const units = (isNaN(parsedM) || parsedM < 1) ? 0 : parsedM * moq;
+                        const inventoryVal = parseFloat(selectedProduct?.inventoryValue) || 0;
+                        const inHand = parseInt(selectedProduct?.inHandInventory) || 0;
+                        const unitCost = (inventoryVal > 0 && inHand > 0) ? (inventoryVal / inHand) : 11;
+                        const fobVal = (units * unitCost).toFixed(2);
+
+                        setSupplierInputs(prev => {
+                          const updated = [...prev];
+                          updated[idx] = { 
+                            ...updated[idx],
+                            moqMultiplier: mStr,
+                            numberOfUnits: units,
+                            fob: units > 0 ? parseFloat(fobVal) : ''
+                          };
+                          return updated;
+                        });
+                      }}
+                      min="1"
+                      step="1"
                     />
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      Calculated Quantity: <strong style={{ color: 'var(--accent-primary)' }}>{supplierInputs[idx]?.numberOfUnits || (supplier.moq || 1)}</strong> units
+                    </div>
                   </div>
                 </div>
               </div>
@@ -496,31 +566,175 @@ export default function TariffCalculator({ currency, convertAmount }) {
                 <div className="cost-breakdown-row">
                   <span className="cost-label" style={{ color: 'var(--success)', fontWeight: 600 }}>FOB (Base Price) $</span>
                   <span className="cost-pct">—</span>
-                  <span className="cost-value" style={{ color: 'var(--success)' }}>{fmt(result.fob)}</span>
+                  <span className="cost-value" style={{ color: 'var(--success)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--success)', marginRight: '2px', opacity: 0.8 }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.fob !== undefined ? supplierInputs[idx].fob : result.fob}
+                        readOnly={true}
+                        step="0.01"
+                        style={{ 
+                          color: 'var(--success)', 
+                          fontWeight: 600, 
+                          width: '80px',
+                          cursor: 'not-allowed',
+                          borderBottom: 'none'
+                        }}
+                      />
+                    </div>
+                  </span>
                 </div>
 
                 <div className="cost-breakdown-row">
                   <span className="cost-label">Applicable Tariff</span>
-                  <span className="cost-pct">{fmtPct(result.tariffPct)}</span>
-                  <span className="cost-value">{fmt(result.tariffValue)}</span>
+                  <span className="cost-pct">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.tariffPctOverride !== undefined ? supplierInputs[idx].tariffPctOverride : parseFloat(result.tariffPct.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'tariffPct', e.target.value, true)}
+                        step="0.01"
+                        style={{ color: 'var(--accent-primary)', fontWeight: 600, width: '65px' }}
+                      />
+                      <span style={{ color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                    </div>
+                  </span>
+                  <span className="cost-value">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '2px' }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={parseFloat(result.tariffValue.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'tariffPct', e.target.value, false)}
+                        step="0.01"
+                        style={{ color: 'var(--text-primary)', fontWeight: 600, width: '75px' }}
+                      />
+                    </div>
+                  </span>
                 </div>
 
                 <div className="cost-breakdown-row">
                   <span className="cost-label">Avg Insurance Cost</span>
-                  <span className="cost-pct">{fmtPct(result.insurancePct)}</span>
-                  <span className="cost-value">{fmt(result.insuranceValue)}</span>
+                  <span className="cost-pct">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.insurancePctOverride !== undefined ? supplierInputs[idx].insurancePctOverride : parseFloat(result.insurancePct.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'insurancePct', e.target.value, true)}
+                        step="0.01"
+                        style={{ color: 'var(--accent-primary)', fontWeight: 600, width: '65px' }}
+                      />
+                      <span style={{ color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                    </div>
+                  </span>
+                  <span className="cost-value">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '2px' }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={parseFloat(result.insuranceValue.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'insurancePct', e.target.value, false)}
+                        step="0.01"
+                        style={{ color: 'var(--text-primary)', fontWeight: 600, width: '75px' }}
+                      />
+                    </div>
+                  </span>
                 </div>
 
                 <div className="cost-breakdown-row">
                   <span className="cost-label">Avg Freight Cost</span>
-                  <span className="cost-pct">{fmtPct(result.freightPct)}</span>
-                  <span className="cost-value">{fmt(result.freightValue)}</span>
+                  <span className="cost-pct">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.freightPctOverride !== undefined ? supplierInputs[idx].freightPctOverride : parseFloat(result.freightPct.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'freightPct', e.target.value, true)}
+                        step="0.01"
+                        style={{ color: 'var(--accent-primary)', fontWeight: 600, width: '65px' }}
+                      />
+                      <span style={{ color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                    </div>
+                  </span>
+                  <span className="cost-value">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '2px' }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={parseFloat(result.freightValue.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'freightPct', e.target.value, false)}
+                        step="0.01"
+                        style={{ color: 'var(--text-primary)', fontWeight: 600, width: '75px' }}
+                      />
+                    </div>
+                  </span>
                 </div>
 
                 <div className="cost-breakdown-row">
                   <span className="cost-label">Other Duties</span>
-                  <span className="cost-pct">{fmtPct(result.otherDutiesPct)}</span>
-                  <span className="cost-value">{fmt(result.otherDutiesValue)}</span>
+                  <span className="cost-pct">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.otherDutiesPctOverride !== undefined ? supplierInputs[idx].otherDutiesPctOverride : parseFloat(result.otherDutiesPct.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'otherDutiesPct', e.target.value, true)}
+                        step="0.01"
+                        style={{ color: 'var(--accent-primary)', fontWeight: 600, width: '65px' }}
+                      />
+                      <span style={{ color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                    </div>
+                  </span>
+                  <span className="cost-value">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '2px' }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={parseFloat(result.otherDutiesValue.toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'otherDutiesPct', e.target.value, false)}
+                        step="0.01"
+                        style={{ color: 'var(--text-primary)', fontWeight: 600, width: '75px' }}
+                      />
+                    </div>
+                  </span>
+                </div>
+
+                <div className="cost-breakdown-row">
+                  <span className="cost-label">Variable Cost</span>
+                  <span className="cost-pct">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={supplierInputs[idx]?.variableCostPctOverride !== undefined ? supplierInputs[idx].variableCostPctOverride : parseFloat((result.variableCostPct || 0).toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'variableCostPct', e.target.value, true)}
+                        step="0.01"
+                        style={{ color: 'var(--accent-primary)', fontWeight: 600, width: '65px' }}
+                      />
+                      <span style={{ color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                    </div>
+                  </span>
+                  <span className="cost-value">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '2px' }}>$</span>
+                      <input
+                        type="number"
+                        className="editable-cost-input"
+                        value={parseFloat((result.variableCostValue || 0).toFixed(2))}
+                        onChange={e => handleOverrideChange(idx, 'variableCostPct', e.target.value, false)}
+                        step="0.01"
+                        style={{ color: 'var(--text-primary)', fontWeight: 600, width: '75px' }}
+                      />
+                    </div>
+                  </span>
                 </div>
 
                 <div className="cost-breakdown-row total">
@@ -622,16 +836,18 @@ export default function TariffCalculator({ currency, convertAmount }) {
             </div>
           </div>
 
-          {/* ═══ SECTION 5: Scenario Analysis ═══ */}
+          {/* ═══ SECTION 5: Sensitivity Matrix ═══ */}
           {showScenario && calcResult.supplierResults.length > 0 && (
             <div className="glass-card mb-6">
-              <div className="card-title" style={{ cursor: 'pointer' }} onClick={() => setShowScenario(!showScenario)}>
+              <div className="card-title">
                 <div className="section-icon"><TrendingUp size={18} /></div>
-                Scenario Analysis — Sensitivity Analysis
-                <span style={{ marginLeft: 'auto' }}>{showScenario ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</span>
+                Sensitivity Matrix
+              </div>
+              <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                Analyze cost and unit price sensitivity across various tariff adjustment levels.
               </div>
 
-              {/* Supplier selector for scenario */}
+              {/* Supplier selector for sensitivity matrix */}
               {calcResult.supplierResults.length > 1 && (
                 <div className="tabs" style={{ marginBottom: '20px' }}>
                   {calcResult.supplierResults.map((r, idx) => (
@@ -639,6 +855,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
                       key={idx}
                       className={`tab ${selectedScenarioSupplier === idx ? 'active' : ''}`}
                       onClick={() => setSelectedScenarioSupplier(idx)}
+                      type="button"
                     >
                       Supplier {String.fromCharCode(65 + idx)}: {r.supplierName}
                     </button>
@@ -646,246 +863,40 @@ export default function TariffCalculator({ currency, convertAmount }) {
                 </div>
               )}
 
-              <div className="scenario-container">
-                {/* Scenario A — Tariff Increase */}
-                <div className="scenario-card">
-                  <div className="scenario-header increase">
-                    <h3>Scenario A: Tariff Increase</h3>
-                    <span className="scenario-direction up">+++</span>
-                  </div>
-                  <div className="scenario-body">
-                    <div className="form-group">
-                      <label className="form-label" style={{ color: 'var(--danger)' }}>% of Tariff Increase</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        value={scenarioIncreasePct}
-                        onChange={e => setScenarioIncreasePct(parseFloat(e.target.value) || 0)}
-                        style={{ borderColor: 'rgba(239,68,68,0.3)' }}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label" style={{ color: 'var(--success)' }}>$ FOB (New, optional)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        placeholder={`Current: ${calcResult.supplierResults[selectedScenarioSupplier]?.fob || '—'}`}
-                        value={scenarioFobA}
-                        onChange={e => setScenarioFobA(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">No. of Units (optional)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        placeholder={`Current: ${calcResult.supplierResults[selectedScenarioSupplier]?.numberOfUnits || '—'}`}
-                        value={scenarioUnitsA}
-                        onChange={e => setScenarioUnitsA(e.target.value)}
-                      />
-                    </div>
-
-                    {scenarioResults && (
-                      <>
-                        <div className="section-divider" />
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">New Tariff Rate</span>
-                          <span className="supplier-detail-value auto-calc" style={{ color: 'var(--danger)' }}>
-                            {fmtPct(scenarioResults.scenarioA.newTariffPct)}
-                          </span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Applicable Tariff %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioA.newTariffPct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Avg Insurance Cost %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioA.insurancePct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Avg Freight Cost %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioA.freightPct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Other Duties %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioA.otherDutiesPct)}</span>
-                        </div>
-                        <div className="section-divider" />
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label" style={{ fontWeight: 700, color: 'var(--text-bright)' }}>New Total Cost</span>
-                          <span className="supplier-detail-value dollar-calc" style={{ color: 'var(--danger)' }}>
-                            {fmt(scenarioResults.scenarioA.newTotalCost)}
-                          </span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label" style={{ fontWeight: 700, color: 'var(--text-bright)' }}>New Cost/Unit</span>
-                          <span className="supplier-detail-value dollar-calc" style={{ color: 'var(--danger)' }}>
-                            {fmt(scenarioResults.scenarioA.newCostPerUnit)}
-                          </span>
-                        </div>
-                        <div style={{ marginTop: '12px', padding: '8px 12px', background: 'var(--danger-bg)', borderRadius: 'var(--radius-sm)', fontSize: '12px', color: 'var(--danger)' }}>
-                          Impact: +{fmt(Math.abs(scenarioResults.scenarioA.costDifference))} ({scenarioResults.scenarioA.costDifferencePct > 0 ? '+' : ''}{scenarioResults.scenarioA.costDifferencePct}%)
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Scenario B — Tariff Decrease */}
-                <div className="scenario-card">
-                  <div className="scenario-header decrease">
-                    <h3>Scenario B: Tariff Decrease</h3>
-                    <span className="scenario-direction down">----</span>
-                  </div>
-                  <div className="scenario-body">
-                    <div className="form-group">
-                      <label className="form-label" style={{ color: 'var(--success)' }}>% of Tariff Decrease</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        value={scenarioDecreasePct}
-                        onChange={e => setScenarioDecreasePct(parseFloat(e.target.value) || 0)}
-                        style={{ borderColor: 'rgba(16,185,129,0.3)' }}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label" style={{ color: 'var(--success)' }}>$ FOB (New, optional)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        placeholder={`Current: ${calcResult.supplierResults[selectedScenarioSupplier]?.fob || '—'}`}
-                        value={scenarioFobB}
-                        onChange={e => setScenarioFobB(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">No. of Units (optional)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        placeholder={`Current: ${calcResult.supplierResults[selectedScenarioSupplier]?.numberOfUnits || '—'}`}
-                        value={scenarioUnitsB}
-                        onChange={e => setScenarioUnitsB(e.target.value)}
-                      />
-                    </div>
-
-                    {scenarioResults && (
-                      <>
-                        <div className="section-divider" />
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">New Tariff Rate</span>
-                          <span className="supplier-detail-value auto-calc" style={{ color: 'var(--success)' }}>
-                            {fmtPct(scenarioResults.scenarioB.newTariffPct)}
-                          </span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Applicable Tariff %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioB.newTariffPct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Avg Insurance Cost %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioB.insurancePct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Avg Freight Cost %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioB.freightPct)}</span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label">Other Duties %</span>
-                          <span className="supplier-detail-value auto-calc">{fmtPct(scenarioResults.scenarioB.otherDutiesPct)}</span>
-                        </div>
-                        <div className="section-divider" />
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label" style={{ fontWeight: 700, color: 'var(--text-bright)' }}>New Total Cost</span>
-                          <span className="supplier-detail-value dollar-calc" style={{ color: 'var(--success)' }}>
-                            {fmt(scenarioResults.scenarioB.newTotalCost)}
-                          </span>
-                        </div>
-                        <div className="supplier-detail-row">
-                          <span className="supplier-detail-label" style={{ fontWeight: 700, color: 'var(--text-bright)' }}>New Cost/Unit</span>
-                          <span className="supplier-detail-value dollar-calc" style={{ color: 'var(--success)' }}>
-                            {fmt(scenarioResults.scenarioB.newCostPerUnit)}
-                          </span>
-                        </div>
-                        <div style={{ marginTop: '12px', padding: '8px 12px', background: 'var(--success-bg)', borderRadius: 'var(--radius-sm)', fontSize: '12px', color: 'var(--success)' }}>
-                          Savings: {fmt(Math.abs(scenarioResults.scenarioB.costDifference))} ({scenarioResults.scenarioB.costDifferencePct}%)
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Scenario Comparison Summary */}
-              {scenarioResults && (
-                <div style={{ marginTop: '20px', padding: '20px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)' }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '16px' }}>
-                    Scenario Spread Analysis
-                  </div>
-                  <div className="grid-3">
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Worst Case (A)</div>
-                      <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--danger)' }}>{fmt(scenarioResults.comparison.worstCase)}</div>
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Baseline (Current)</div>
-                      <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-bright)' }}>{fmt(scenarioResults.comparison.baselineCost)}</div>
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Best Case (B)</div>
-                      <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--success)' }}>{fmt(scenarioResults.comparison.bestCase)}</div>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-                    Total Spread: <span style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>{fmt(scenarioResults.comparison.spread)}</span>
-                    {' '}({scenarioResults.comparison.spreadPct}% range)
-                  </div>
-                </div>
-              )}
-
               {/* Sensitivity Table */}
               {sensitivityData && (
-                <div style={{ marginTop: '20px' }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '12px' }}>
-                    Sensitivity Matrix
-                  </div>
-                  <div className="data-table-container">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Tariff Change %</th>
-                          <th>New Tariff Rate</th>
-                          <th>New Total Cost</th>
-                          <th>New Cost/Unit</th>
-                          <th>Impact</th>
+                <div className="data-table-container">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Tariff Change %</th>
+                        <th>New Tariff Rate</th>
+                        <th>New Total Cost</th>
+                        <th>New Cost/Unit</th>
+                        <th>Impact</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sensitivityData.map((row, idx) => (
+                        <tr key={idx} style={{ background: row.changePct === 0 ? 'var(--accent-gradient-subtle)' : undefined }}>
+                          <td style={{
+                            fontWeight: 700,
+                            color: row.changePct > 0 ? 'var(--danger)' : row.changePct < 0 ? 'var(--success)' : 'var(--text-bright)',
+                          }}>
+                            {row.changePct > 0 ? '+' : ''}{row.changePct}%
+                          </td>
+                          <td>{fmtPct(row.newTariffPct)}</td>
+                          <td style={{ fontWeight: 600 }}>{fmt(row.newTotalCost)}</td>
+                          <td style={{ fontWeight: 600 }}>{fmt(row.newCostPerUnit)}</td>
+                          <td>
+                            <span className={`badge ${row.costDifferencePct > 0 ? 'critical' : row.costDifferencePct < 0 ? 'success' : 'neutral'}`}>
+                              {row.costDifferencePct > 0 ? '+' : ''}{row.costDifferencePct}%
+                            </span>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {sensitivityData.map((row, idx) => (
-                          <tr key={idx} style={{ background: row.changePct === 0 ? 'var(--accent-gradient-subtle)' : undefined }}>
-                            <td style={{
-                              fontWeight: 700,
-                              color: row.changePct > 0 ? 'var(--danger)' : row.changePct < 0 ? 'var(--success)' : 'var(--text-bright)',
-                            }}>
-                              {row.changePct > 0 ? '+' : ''}{row.changePct}%
-                            </td>
-                            <td>{fmtPct(row.newTariffPct)}</td>
-                            <td style={{ fontWeight: 600 }}>{fmt(row.newTotalCost)}</td>
-                            <td style={{ fontWeight: 600 }}>{fmt(row.newCostPerUnit)}</td>
-                            <td>
-                              <span className={`badge ${row.costDifferencePct > 0 ? 'critical' : row.costDifferencePct < 0 ? 'success' : 'neutral'}`}>
-                                {row.costDifferencePct > 0 ? '+' : ''}{row.costDifferencePct}%
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

@@ -62,19 +62,21 @@ export function calculateTariff(hsCode, destinationCountry, supplierInputs) {
     const fob = parseFloat(input.fob) || 0;
     const numberOfUnits = parseInt(input.numberOfUnits) || 1;
 
-    // Auto-calculated rates
-    const tariffPct = getTariffRate(destinationCountry, hsCode, originCountryCode);
-    const insurancePct = getInsuranceCostPct(transportMode, originRegion, destRegion);
-    const freightPct = getShippingCostPct(transportMode, originRegion, destRegion);
-    const otherDutiesPct = getOtherDutiesPct(destinationCountry);
+    // Auto-calculated rates (or user overrides)
+    const tariffPct = input.tariffPctOverride !== undefined ? parseFloat(input.tariffPctOverride) : getTariffRate(destinationCountry, hsCode, originCountryCode);
+    const insurancePct = input.insurancePctOverride !== undefined ? parseFloat(input.insurancePctOverride) : getInsuranceCostPct(transportMode, originRegion, destRegion);
+    const freightPct = input.freightPctOverride !== undefined ? parseFloat(input.freightPctOverride) : getShippingCostPct(transportMode, originRegion, destRegion);
+    const otherDutiesPct = input.otherDutiesPctOverride !== undefined ? parseFloat(input.otherDutiesPctOverride) : getOtherDutiesPct(destinationCountry);
+    const variableCostPct = input.variableCostPctOverride !== undefined ? parseFloat(input.variableCostPctOverride) : 0;
 
     // Dollar calculations
     const tariffValue = fob * (tariffPct / 100);
     const insuranceValue = fob * (insurancePct / 100);
     const freightValue = fob * (freightPct / 100);
     const otherDutiesValue = fob * (otherDutiesPct / 100);
+    const variableCostValue = fob * (variableCostPct / 100);
 
-    const totalLandedCost = fob + tariffValue + insuranceValue + freightValue + otherDutiesValue;
+    const totalLandedCost = fob + tariffValue + insuranceValue + freightValue + otherDutiesValue + variableCostValue;
     const landedCostPerUnit = numberOfUnits > 0 ? totalLandedCost / numberOfUnits : 0;
 
     // Trade corridors
@@ -105,12 +107,14 @@ export function calculateTariff(hsCode, destinationCountry, supplierInputs) {
       insurancePct,
       freightPct,
       otherDutiesPct,
+      variableCostPct,
 
       // Auto-calculated values ($)
       tariffValue,
       insuranceValue,
       freightValue,
       otherDutiesValue,
+      variableCostValue,
 
       // Final calculations
       totalLandedCost,

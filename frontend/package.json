@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "node deploy.cjs",
+    "read-headers": "node scripts/readHeaders.cjs"
   },
   "dependencies": {
     "lucide-react": "^1.16.0",

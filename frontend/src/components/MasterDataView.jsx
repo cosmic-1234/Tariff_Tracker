@@ -252,6 +252,7 @@ export default function MasterDataView() {
                   <th>Region</th>
                   <th>Product (ERP)</th>
                   <th>Supply %</th>
+                  <th>MOQ</th>
                   <th>Lead Time</th>
                   <th>Transport</th>
                   <th>Reliability</th>
@@ -266,6 +267,7 @@ export default function MasterDataView() {
                     <td><span className="badge info">{s.region}</span></td>
                     <td style={{ fontFamily: 'monospace' }}>{s.productErpCode}</td>
                     <td style={{ fontWeight: 600 }}>{s.supplyPct}%</td>
+                    <td style={{ fontWeight: 600 }}>{s.moq} units</td>
                     <td>{s.leadTimeDays} days</td>
                     <td><span className="badge neutral">{s.defaultTransport}</span></td>
                     <td>

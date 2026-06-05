@@ -1146,135 +1146,36 @@ export default function CriticalityScoring({ currency, convertAmount }) {
       </div>
 
       {/* TWO-COLUMN GRID: 5X5 MATRIX VS INPUT FORM */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.6fr', gap: '20px', alignItems: 'stretch' }}>
+      <div className="criticality-layout-grid">
         
         {/* Left Side: 5x5 Heatmap Matrix Card */}
         <div className="glass-card animate-slide-up" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
             <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Layers size={18} className="icon" />
-              {viewMode === 'treemap' ? 'Sourcing & Criticality Treemap View' : '5×5 SDE-VED Composite Criticality Matrix'}
-            </div>
-            
-            {/* View Mode Switcher Pills */}
-            <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-              <button
-                type="button"
-                onClick={() => setViewMode('treemap')}
-                className={`tab ${viewMode === 'treemap' ? 'active' : ''}`}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  background: viewMode === 'treemap' ? 'var(--accent-gradient)' : 'transparent',
-                  color: viewMode === 'treemap' ? 'white' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontFamily: "'Inter', sans-serif"
-                }}
-              >
-                Treemap View
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('matrix')}
-                className={`tab ${viewMode === 'matrix' ? 'active' : ''}`}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  background: viewMode === 'matrix' ? 'var(--accent-gradient)' : 'transparent',
-                  color: viewMode === 'matrix' ? 'white' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontFamily: "'Inter', sans-serif"
-                }}
-              >
-                5x5 Matrix Grid
-              </button>
+              Sourcing & Criticality Treemap View
             </div>
           </div>
           
-          {/* Conditional Subtitle & Grouping Filters */}
-          {viewMode === 'treemap' ? (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Click tiles to filter table. Tile size represents {matrixSizingMode === 'value' ? 'inventory cash value' : matrixSizingMode === 'count' ? 'number of components' : 'VED * SDE composite score'}.
-              </div>
-              
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {/* Sizing pill */}
-                <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Size:</span>
-                  {['score', 'value', 'count'].map(sz => (
-                    <button
-                      key={sz}
-                      type="button"
-                      onClick={() => setMatrixSizingMode(sz)}
-                      className={`tab ${matrixSizingMode === sz ? 'active' : ''}`}
-                      style={{
-                        padding: '3px 8px',
-                        fontSize: '10px',
-                        border: 'none',
-                        borderRadius: 'var(--radius-sm)',
-                        background: matrixSizingMode === sz ? 'var(--accent-gradient)' : 'transparent',
-                        color: matrixSizingMode === sz ? 'white' : 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontFamily: "'Inter', sans-serif"
-                      }}
-                    >
-                      {sz === 'score' ? 'Score' : sz === 'value' ? 'Value' : 'Count'}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Grouping pill */}
-                <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Group:</span>
-                  {['product', 'category', 'cell'].map(g => (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => setTreemapGroup(g)}
-                      className={`tab ${treemapGroup === g ? 'active' : ''}`}
-                      style={{
-                        padding: '3px 8px',
-                        fontSize: '10px',
-                        border: 'none',
-                        borderRadius: 'var(--radius-sm)',
-                        background: treemapGroup === g ? 'var(--text-primary)' : 'transparent',
-                        color: treemapGroup === g ? 'var(--bg-primary)' : 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontFamily: "'Inter', sans-serif"
-                      }}
-                    >
-                      {g === 'product' ? 'Products' : g === 'category' ? 'Categories' : 'SDE-VED'}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          {/* Subtitle & Grouping Filters */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Click tiles to filter table. Tile size represents {matrixSizingMode === 'value' ? 'inventory cash value' : matrixSizingMode === 'count' ? 'number of components' : 'VED * SDE composite score'}.
             </div>
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                SDE procurement difficulty (rows); VED plant criticality (columns). {matrixSizingMode === 'score' ? 'Sizing is determined geometrically by SDE * VED composite scores.' : matrixSizingMode === 'value' ? 'Sizing is proportional to inventory cash value.' : matrixSizingMode === 'count' ? 'Sizing is proportional to component count.' : 'Sizing is equal.'}
-              </div>
-              
-              {/* Sizing Mode Switcher */}
-              <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                {['score', 'value', 'count', 'equal'].map(sz => (
+            
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {/* Sizing pill */}
+              <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Size:</span>
+                {['score', 'value'].map(sz => (
                   <button
                     key={sz}
                     type="button"
                     onClick={() => setMatrixSizingMode(sz)}
                     className={`tab ${matrixSizingMode === sz ? 'active' : ''}`}
                     style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
+                      padding: '3px 8px',
+                      fontSize: '10px',
                       border: 'none',
                       borderRadius: 'var(--radius-sm)',
                       background: matrixSizingMode === sz ? 'var(--accent-gradient)' : 'transparent',
@@ -1283,19 +1184,43 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                       fontWeight: 600,
                       fontFamily: "'Inter', sans-serif"
                     }}
-                    title={sz === 'score' ? 'Sizing is determined geometrically by SDE * VED scores' : sz === 'value' ? 'Scale matrix cells proportionally by locked-up inventory value' : sz === 'count' ? 'Scale matrix cells proportionally by component count' : 'Traditional equal-sized 5x5 cells'}
                   >
-                    {sz === 'score' ? 'SDE*VED Score' : sz === 'value' ? 'Value' : sz === 'count' ? 'Count' : 'Equal'}
+                    {sz === 'score' ? 'Score' : 'Value'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Grouping pill */}
+              <div style={{ display: 'flex', gap: '3px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '9.5px', alignSelf: 'center', color: 'var(--text-muted)', padding: '0 4px', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Group:</span>
+                {['product', 'category'].map(g => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setTreemapGroup(g)}
+                    className={`tab ${treemapGroup === g ? 'active' : ''}`}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '10px',
+                      border: 'none',
+                      borderRadius: 'var(--radius-sm)',
+                      background: treemapGroup === g ? 'var(--text-primary)' : 'transparent',
+                      color: treemapGroup === g ? 'var(--bg-primary)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontWeight: 650,
+                      fontFamily: "'Inter', sans-serif"
+                    }}
+                  >
+                    {g === 'product' ? 'Products' : 'Categories'}
                   </button>
                 ))}
               </div>
             </div>
-          )}
+          </div>
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative' }}>
-            {viewMode === 'treemap' ? (
-              <div 
-                style={{ 
+            <div 
+              style={{ 
                   position: 'relative', 
                   width: '100%', 
                   height: '380px', 
@@ -1510,77 +1435,6 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                   </div>
                 )}
               </div>
-            ) : (
-              <div 
-                className="matrix-5x5-grid"
-                style={{
-                  gridTemplateColumns: `50px ${colWidths.map(w => `${w}fr`).join(' ')}`,
-                  gridTemplateRows: `40px ${rowHeights.map(h => `${h}fr`).join(' ')}`,
-                  transition: 'grid-template-columns 0.4s cubic-bezier(0.16, 1, 0.3, 1), grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
-                }}
-              >
-                {/* Header Corner Spacer */}
-                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '9.5px', fontWeight: 700 }}>
-                  <span>SDE ↓</span>
-                  <span>VED →</span>
-                </div>
-                
-                {/* X-Axis labels (VED Columns) */}
-                {[1, 2, 3, 4, 5].map(v => (
-                  <div key={v} className="matrix-5x5-label-row" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    VED {v}
-                  </div>
-                ))}
-
-                {/* Rows */}
-                {[1, 2, 3, 4, 5].map(sdeScore => (
-                  <>
-                    {/* Y-Axis Label */}
-                    <div key={`sde-${sdeScore}`} className="matrix-5x5-label-col" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-                      SDE {sdeScore}
-                    </div>
-                    
-                    {/* Matrix cells */}
-                    {[1, 2, 3, 4, 5].map(vedScore => {
-                      const score = sdeScore * vedScore;
-                      const band = bandsConfig.find(b => score >= b.min && score <= b.max) || bandsConfig[0];
-                      const stats = matrix5x5Map[sdeScore]?.[vedScore] || { count: 0, value: 0 };
-                      const isSelected = selectedCell && selectedCell.sde === sdeScore && selectedCell.ved === vedScore;
-
-                      return (
-                        <div
-                          key={`${sdeScore}-${vedScore}`}
-                          onClick={() => setSelectedCell(prev => prev && prev.sde === sdeScore && prev.ved === vedScore ? null : { sde: sdeScore, ved: vedScore })}
-                          className={`matrix-5x5-cell ${isSelected ? 'selected' : ''}`}
-                          style={{
-                            background: getScoreColor(score),
-                            color: '#ffffff',
-                            borderColor: 'rgba(255,255,255,0.15)',
-                            textShadow: '0 1.5px 3px rgba(0, 0, 0, 0.85)'
-                          }}
-                        >
-                          {/* Static Content (Score and Short Band label - Always Visible) */}
-                          <div className="default-content">
-                            <span style={{ fontWeight: 800, fontSize: '13px' }}>{score}</span>
-                            <span style={{ fontWeight: 650, fontSize: '9px', textTransform: 'uppercase', opacity: 0.85 }}>
-                              {band.name === 'Very High' ? 'V.High' : band.name === 'Moderate' ? 'Mod.' : band.name}
-                            </span>
-                          </div>
-
-                          {/* Hover Content (Only Visible on Hover) */}
-                          <div className="hover-content">
-                            <span style={{ fontWeight: 800, fontSize: '11px', color: '#fff' }}>{stats.count} components</span>
-                            <span style={{ fontSize: '9px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', whiteSpace: 'nowrap', marginTop: '2px' }}>
-                              {stats.value > 0 ? fmt(stats.value) : '$0'}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Bottom Scale/Gradient Legend (Styled to match InventoryClassification EXACTLY) */}
