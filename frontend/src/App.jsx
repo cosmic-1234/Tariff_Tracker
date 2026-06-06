@@ -7,6 +7,7 @@ import InventoryClassification from './components/InventoryClassification.jsx';
 import RiskEngine from './components/RiskEngine.jsx';
 import ProductMaster from './components/ProductMaster.jsx';
 import MasterDataView from './components/MasterDataView.jsx';
+import AutonomousProcurement from './components/AutonomousProcurement.jsx';
 import { fetchExchangeRates } from './services/exchangeRateService.js';
 import { fetchLiveCountries } from './services/countryService.js';
 import { countries } from './data/masterData.js';
@@ -20,6 +21,7 @@ function App() {
     () => localStorage.getItem('tariff_tracker_theme') || 'dark'
   );
   const [countriesList, setCountriesList] = useState(countries);
+  const [selectedProductForCalc, setSelectedProductForCalc] = useState(null);
 
   // Sync theme to root element
   useEffect(() => {
@@ -58,6 +60,7 @@ function App() {
 
   const pageTitle = {
     dashboard:    'Dashboard',
+    procurement:  'Autonomous Procurement Optimizer',
     calculator:   'Tariff Calculator',
     scoring:      'SDE-VED Criticality Scoring Tool',
     classification: 'Inventory Risk Analysis (SDE/VED)',
@@ -70,8 +73,17 @@ function App() {
     switch (currentPage) {
       case 'dashboard':
         return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} />;
+      case 'procurement':
+        return <AutonomousProcurement currency={currency} convertAmount={convertAmount} />;
       case 'calculator':
-        return <TariffCalculator currency={currency} convertAmount={convertAmount} />;
+        return (
+          <TariffCalculator
+            currency={currency}
+            convertAmount={convertAmount}
+            preselectedProduct={selectedProductForCalc}
+            clearPreselectedProduct={() => setSelectedProductForCalc(null)}
+          />
+        );
       case 'scoring':
         return <CriticalityScoring currency={currency} convertAmount={convertAmount} />;
       case 'classification':
@@ -79,7 +91,14 @@ function App() {
       case 'riskengine':
         return <RiskEngine currency={currency} convertAmount={convertAmount} />;
       case 'products':
-        return <ProductMaster onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} />;
+        return (
+          <ProductMaster
+            onNavigate={setCurrentPage}
+            setSelectedProductForCalc={setSelectedProductForCalc}
+            currency={currency}
+            convertAmount={convertAmount}
+          />
+        );
       case 'masterdata':
         return <MasterDataView />;
       default:

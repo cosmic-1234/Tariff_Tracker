@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, RefreshCw, ChevronDown, Menu, X } from 'lucide-react';
+import { Sun, Moon, RefreshCw, ChevronDown, Menu, X, LayoutDashboard, Cpu, Wrench, Database } from 'lucide-react';
 import { fetchExchangeRates } from '../services/exchangeRateService.js';
 
 // ── Tech Mahindra SVG Logo ──────────────────────────────────────────────────
 const TechMahindraLogo = ({ theme }) => (
-  <svg width="160" height="40" viewBox="0 0 200 50" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Tech Mahindra">
+  <svg width="150" height="36" viewBox="0 0 200 50" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Tech Mahindra">
     <title>Tech Mahindra</title>
-    <g className="techm-text-logo">
+    <g>
       <path
         d="M74.1701 15.9128H69.1051V25.6588H65.5673V15.9128H60.5022V12.9792H74.1701V15.9128ZM75.8703 25.6624V12.9792H87.8169V15.733H79.3904V17.89H87.302V20.4461H79.3904V22.9266H88.2261V25.6624H75.8738H75.8703ZM89.7252 19.5905C89.7252 18.0087 90.0285 16.7181 90.6317 15.7222C91.2348 14.7264 92.1342 13.9894 93.3229 13.5113C94.5151 13.0332 95.9789 12.7959 97.7213 12.7959C98.3033 12.7959 98.8218 12.8067 99.2839 12.8318C99.746 12.857 100.18 12.8966 100.582 12.9505C100.984 13.0044 101.379 13.0727 101.764 13.1482C102.148 13.2273 102.55 13.328 102.963 13.4466L102.25 16.0386C101.728 15.9307 101.227 15.8409 100.748 15.7762C100.268 15.7115 99.7953 15.6575 99.3333 15.6216C98.8712 15.5856 98.4092 15.5677 97.9471 15.5677C97.1394 15.5677 96.448 15.6431 95.866 15.7941C95.284 15.9451 94.8114 16.1788 94.4446 16.4916C94.0777 16.8043 93.8061 17.2142 93.6263 17.7139C93.4499 18.2136 93.3582 18.8175 93.3582 19.515C93.3582 20.1441 93.4428 20.6869 93.6157 21.1471C93.7885 21.6073 94.0566 21.9776 94.4234 22.2616C94.7902 22.5456 95.2523 22.7577 95.8096 22.8943C96.3669 23.0345 97.0371 23.1028 97.8166 23.1028C98.5961 23.1028 99.432 23.0525 100.279 22.9482C101.125 22.8475 101.929 22.7037 102.688 22.524L103.326 25.0405C102.924 25.1627 102.515 25.2706 102.099 25.3677C101.682 25.4647 101.238 25.5474 100.758 25.6121C100.279 25.6768 99.753 25.7343 99.1851 25.7739C98.6173 25.817 97.9824 25.8386 97.284 25.8386C96.053 25.8386 94.9631 25.72 94.0213 25.4863C93.0795 25.249 92.2894 24.8859 91.6475 24.3898C91.0091 23.8937 90.5258 23.2502 90.1978 22.4593C89.8733 21.6684 89.7075 20.7121 89.7075 19.5869L89.7252 19.5905ZM105.287 25.6624V12.9792H108.843V18.3969H115.685V12.9792H119.241V25.6624H115.685V21.352H108.843V25.6624H105.287Z"
         fill={theme === 'dark' ? '#e2e8f0' : '#4D4D4F'}
@@ -18,69 +18,60 @@ const TechMahindraLogo = ({ theme }) => (
         fill="#E31837"
       />
     </g>
-    <path
-      className="techm-symbol"
-      d="M0 18.1239V49.2998L48.0759 31.4757V0.299805L0 18.1239Z"
-      fill="#E31837"
-    />
+    <path d="M0 18.1239V49.2998L48.0759 31.4757V0.299805L0 18.1239Z" fill="#E31837" />
   </svg>
 );
 
-// ── Mega Menu Items ──────────────────────────────────────────────────────────
+// ── Sidebar Config with Icons ────────────────────────────────────────────────
 const navConfig = [
-  {
-    id: 'dashboard',
-    label: 'Dashboard',
-    type: 'link',
-  },
+  { id: 'dashboard', label: 'Dashboard', type: 'link', icon: <LayoutDashboard size={17} /> },
   {
     id: 'tools',
     label: 'Tools',
     type: 'mega',
+    icon: <Wrench size={17} />,
     items: [
-      { id: 'calculator',  label: 'Tariff Calculator',    desc: 'Calculate import duties & tariffs' },
-      { id: 'scoring',     label: 'Criticality Scoring',  desc: 'SDE-VED product classification' },
-      { id: 'riskengine',  label: 'Risk Engine',          desc: 'Supply chain risk analysis' },
+      { id: 'procurement', label: 'Autonomous Procurement' },
+      { id: 'calculator',  label: 'Tariff Calculator' },
+      { id: 'scoring',     label: 'Criticality Scoring' },
+      { id: 'riskengine',  label: 'Risk Engine' },
     ],
   },
   {
     id: 'data',
     label: 'Data',
     type: 'mega',
+    icon: <Database size={17} />,
     items: [
-      { id: 'products',   label: 'Product Master',  desc: 'Manage product catalog' },
-      { id: 'masterdata', label: 'Master Data',     desc: 'Reference data management' },
+      { id: 'products',   label: 'Product Master' },
+      { id: 'masterdata', label: 'Master Data' },
     ],
   },
 ];
 
 export default function Navbar({
-  currentPage,
-  onNavigate,
-  currency,
-  onCurrencyChange,
-  exchangeRates,
-  rateSource,
-  theme,
-  onToggleTheme,
+  currentPage, onNavigate,
+  currency, onCurrencyChange,
+  exchangeRates, rateSource,
+  theme, onToggleTheme,
 }) {
-  const [openMenu, setOpenMenu]         = useState(null);
-  const [mobileOpen, setMobileOpen]     = useState(false);
-  const [refreshing, setRefreshing]     = useState(false);
-  const menuRef                         = useRef(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [openSections, setOpenSections] = useState({ tools: true, data: true });
+  const [refreshing, setRefreshing] = useState(false);
+  const navRef = useRef(null);
 
   const usdToInr = exchangeRates?.INR ? exchangeRates.INR.toFixed(2) : '—';
 
-  // Close mega-menu on outside click
+  // Close mobile sidebar on navigate or outside click
   useEffect(() => {
     const handler = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
-        setOpenMenu(null);
+      if (mobileOpen && navRef.current && !navRef.current.contains(e.target)) {
+        setMobileOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [mobileOpen]);
 
   const handleRefreshRates = async () => {
     setRefreshing(true);
@@ -92,187 +83,152 @@ export default function Navbar({
 
   const handleNavigate = (id) => {
     onNavigate(id);
-    setOpenMenu(null);
     setMobileOpen(false);
   };
 
-  return (
-    <nav className="tm-navbar" ref={menuRef} role="navigation" aria-label="Main navigation">
-      {/* ── Top Bar (Logo + Nav + Controls) ── */}
-      <div className="tm-navbar-inner">
+  const toggleSection = (id) => {
+    setOpenSections(prev => ({ ...prev, [id]: !prev[id] }));
+  };
 
-        {/* Logo */}
-        <button
-          className="tm-nav-logo"
-          onClick={() => handleNavigate('dashboard')}
-          aria-label="Go to Dashboard"
-        >
+  const renderSidebarContent = () => (
+    <div className="tm-sidebar-inner">
+      {/* Logo Area */}
+      <div className="tm-sidebar-logo">
+        <button onClick={() => handleNavigate('dashboard')} aria-label="Home">
           <TechMahindraLogo theme={theme} />
         </button>
-
-        {/* Desktop Nav Links */}
-        <div className="tm-nav-links">
-          {navConfig.map((item) => {
-            if (item.type === 'link') {
-              return (
-                <button
-                  key={item.id}
-                  className={`tm-nav-link ${currentPage === item.id ? 'active' : ''}`}
-                  onClick={() => handleNavigate(item.id)}
-                >
-                  {item.label}
-                </button>
-              );
-            }
-
-            const isOpen   = openMenu === item.id;
-            const hasActive = item.items?.some(i => i.id === currentPage);
-
-            return (
-              <div key={item.id} className="tm-mega-wrapper">
-                <button
-                  className={`tm-nav-link tm-nav-link-dropdown ${isOpen || hasActive ? 'active' : ''}`}
-                  onClick={() => setOpenMenu(isOpen ? null : item.id)}
-                  onMouseEnter={() => setOpenMenu(item.id)}
-                  aria-haspopup="true"
-                  aria-expanded={isOpen}
-                >
-                  {item.label}
-                  <ChevronDown
-                    size={14}
-                    className={`tm-chevron ${isOpen ? 'rotated' : ''}`}
-                  />
-                </button>
-
-                {isOpen && (
-                  <div
-                    className="tm-mega-menu"
-                    onMouseLeave={() => setOpenMenu(null)}
-                  >
-                    <div className="tm-mega-menu-inner">
-                      <div className="tm-mega-heading">{item.label}</div>
-                      <div className="tm-mega-items">
-                        {item.items.map((sub) => (
-                          <button
-                            key={sub.id}
-                            className={`tm-mega-item ${currentPage === sub.id ? 'active' : ''}`}
-                            onClick={() => handleNavigate(sub.id)}
-                          >
-                            <span className="tm-mega-item-dot" />
-                            <span>
-                              <span className="tm-mega-item-label">{sub.label}</span>
-                              <span className="tm-mega-item-desc">{sub.desc}</span>
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Right Controls */}
-        <div className="tm-nav-controls">
-          {/* Exchange Rate */}
-          <div className="tm-exchange-badge">
-            <span className="tm-exchange-label">1 USD =</span>
-            <span className="tm-exchange-value">₹{usdToInr}</span>
-            {rateSource && <span className="tm-exchange-source">{rateSource}</span>}
-            <button
-              className="tm-icon-btn"
-              onClick={handleRefreshRates}
-              title="Refresh exchange rates"
-              aria-label="Refresh exchange rates"
-            >
-              <RefreshCw size={12} className={refreshing ? 'tm-spin' : ''} />
-            </button>
-          </div>
-
-          {/* Currency Toggle */}
-          <div className="tm-currency-toggle" role="group" aria-label="Select currency">
-            {['USD', 'INR', 'EUR'].map((c) => (
-              <button
-                key={c}
-                className={`tm-currency-btn ${currency === c ? 'active' : ''}`}
-                onClick={() => onCurrencyChange(c)}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-
-          {/* Theme Toggle */}
-          <button
-            className="tm-theme-btn"
-            onClick={onToggleTheme}
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            aria-label="Toggle theme"
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-
-          {/* Mobile Hamburger */}
-          <button
-            className="tm-hamburger"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            aria-label="Toggle mobile menu"
-          >
-            {mobileOpen ? <X size={22} /> : <Menu size={22} />}
-          </button>
-        </div>
       </div>
 
-      {/* ── Mobile Menu ── */}
-      {mobileOpen && (
-        <div className="tm-mobile-menu">
-          {navConfig.map((item) => {
-            if (item.type === 'link') {
-              return (
-                <button
-                  key={item.id}
-                  className={`tm-mobile-link ${currentPage === item.id ? 'active' : ''}`}
-                  onClick={() => handleNavigate(item.id)}
-                >
-                  {item.label}
-                </button>
-              );
-            }
+      {/* Navigation Links */}
+      <div className="tm-sidebar-links">
+        {navConfig.map((item) => {
+          if (item.type === 'link') {
             return (
-              <div key={item.id} className="tm-mobile-group">
-                <div className="tm-mobile-group-label">{item.label}</div>
-                {item.items.map((sub) => (
-                  <button
-                    key={sub.id}
-                    className={`tm-mobile-link tm-mobile-sub ${currentPage === sub.id ? 'active' : ''}`}
-                    onClick={() => handleNavigate(sub.id)}
-                  >
-                    {sub.label}
-                  </button>
-                ))}
-              </div>
+              <button
+                key={item.id}
+                className={`tm-sidebar-link ${currentPage === item.id ? 'active' : ''}`}
+                onClick={() => handleNavigate(item.id)}
+              >
+                <span className="tm-sidebar-link-content">
+                  {item.icon}
+                  {item.label}
+                </span>
+              </button>
             );
-          })}
-          <div className="tm-mobile-controls">
-            <div className="tm-currency-toggle">
-              {['USD', 'INR', 'EUR'].map((c) => (
-                <button
-                  key={c}
-                  className={`tm-currency-btn ${currency === c ? 'active' : ''}`}
-                  onClick={() => onCurrencyChange(c)}
-                >
-                  {c}
-                </button>
-              ))}
+          }
+
+          const hasActive = item.items?.some(sub => sub.id === currentPage);
+          const isExpanded = openSections[item.id];
+
+          return (
+            <div key={item.id} style={{ display: 'flex', flexDirection: 'column' }}>
+              <button
+                className={`tm-sidebar-link ${hasActive ? 'active' : ''}`}
+                onClick={() => toggleSection(item.id)}
+                style={{ active: hasActive ? '1' : '0' }}
+              >
+                <span className="tm-sidebar-link-content">
+                  {item.icon}
+                  {item.label}
+                </span>
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s ease',
+                    opacity: 0.8
+                  }}
+                />
+              </button>
+
+              {isExpanded && (
+                <div className="tm-sidebar-submenu">
+                  {item.items.map((sub) => (
+                    <button
+                      key={sub.id}
+                      className={`tm-sidebar-sublink ${currentPage === sub.id ? 'active' : ''}`}
+                      onClick={() => handleNavigate(sub.id)}
+                    >
+                      {sub.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <button className="tm-theme-btn" onClick={onToggleTheme}>
-              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            </button>
-          </div>
+          );
+        })}
+      </div>
+
+      {/* Sidebar Controls Footer */}
+      <div className="tm-sidebar-controls">
+        {/* Exchange Rate */}
+        <div className="tm-sidebar-exchange-badge">
+          <span>1 USD = ₹{usdToInr}</span>
+          <button onClick={handleRefreshRates} title="Refresh rates" aria-label="Refresh rates">
+            <RefreshCw size={11} className={refreshing ? 'tm-spin' : ''} />
+          </button>
         </div>
-      )}
-    </nav>
+
+        {/* Currency Selector */}
+        <div className="tm-sidebar-currency-toggle" role="group" aria-label="Currency">
+          {['USD', 'INR', 'EUR'].map(c => (
+            <button
+              key={c}
+              className={`tm-sidebar-currency-btn ${currency === c ? 'active' : ''}`}
+              onClick={() => onCurrencyChange(c)}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+
+        {/* Theme Toggle */}
+        <button
+          className="tm-sidebar-theme-btn"
+          onClick={onToggleTheme}
+          title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          aria-label="Toggle theme"
+        >
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* ── Mobile Header Bar ── */}
+      <div className="tm-mobile-header">
+        <div className="tm-mobile-header-logo">
+          <button onClick={() => handleNavigate('dashboard')} aria-label="Home">
+            <TechMahindraLogo theme={theme} />
+          </button>
+        </div>
+        <button
+          className="tm-mobile-hamburger"
+          onClick={() => setMobileOpen(!mobileOpen)}
+          aria-label="Menu"
+        >
+          {mobileOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+      </div>
+
+      {/* Mobile Drawer Overlay Backdrop */}
+      <div
+        className={`tm-sidebar-overlay ${mobileOpen ? 'mobile-open' : ''}`}
+        onClick={() => setMobileOpen(false)}
+      />
+
+      {/* ── Left Sidebar navigation ── */}
+      <aside
+        className={`tm-sidebar ${mobileOpen ? 'mobile-open' : ''}`}
+        ref={navRef}
+        role="complementary"
+        aria-label="Sidebar navigation"
+      >
+        {renderSidebarContent()}
+      </aside>
+    </>
   );
 }

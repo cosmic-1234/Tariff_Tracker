@@ -26,26 +26,36 @@ const getInitialSupplierInputs = (product, suppliers) => {
   });
 };
 
-export default function TariffCalculator({ currency, convertAmount }) {
+export default function TariffCalculator({ currency, convertAmount, preselectedProduct, clearPreselectedProduct }) {
+  // Load initial state from sessionStorage (persisting state between tab navigations)
+  const savedState = useMemo(() => {
+    try {
+      const data = sessionStorage.getItem('tariff_tracker_calculator_state');
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      return null;
+    }
+  }, []);
+
   // ── State ──
-  const [hsCode, setHsCode] = useState('');
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [destinationCountry, setDestinationCountry] = useState('India');
-  const [suppliers, setSuppliers] = useState([]);
-  const [supplierInputs, setSupplierInputs] = useState([]);
-  const [showScenario, setShowScenario] = useState(false);
+  const [hsCode, setHsCode] = useState(savedState?.hsCode || '');
+  const [selectedProduct, setSelectedProduct] = useState(savedState?.selectedProduct || null);
+  const [destinationCountry, setDestinationCountry] = useState(savedState?.destinationCountry || 'India');
+  const [suppliers, setSuppliers] = useState(savedState?.suppliers || []);
+  const [supplierInputs, setSupplierInputs] = useState(savedState?.supplierInputs || []);
+  const [showScenario, setShowScenario] = useState(savedState?.showScenario || false);
   const [liveSuggestions, setLiveSuggestions] = useState([]);
   const [isSearchingApi, setIsSearchingApi] = useState(false);
-  const [calcResult, setCalcResult] = useState(null);
+  const [calcResult, setCalcResult] = useState(savedState?.calcResult || null);
 
   // Scenario state
-  const [scenarioIncreasePct, setScenarioIncreasePct] = useState(25);
-  const [scenarioDecreasePct, setScenarioDecreasePct] = useState(15);
-  const [scenarioFobA, setScenarioFobA] = useState('');
-  const [scenarioFobB, setScenarioFobB] = useState('');
-  const [scenarioUnitsA, setScenarioUnitsA] = useState('');
-  const [scenarioUnitsB, setScenarioUnitsB] = useState('');
-  const [selectedScenarioSupplier, setSelectedScenarioSupplier] = useState(0);
+  const [scenarioIncreasePct, setScenarioIncreasePct] = useState(savedState?.scenarioIncreasePct !== undefined ? savedState.scenarioIncreasePct : 25);
+  const [scenarioDecreasePct, setScenarioDecreasePct] = useState(savedState?.scenarioDecreasePct !== undefined ? savedState.scenarioDecreasePct : 15);
+  const [scenarioFobA, setScenarioFobA] = useState(savedState?.scenarioFobA || '');
+  const [scenarioFobB, setScenarioFobB] = useState(savedState?.scenarioFobB || '');
+  const [scenarioUnitsA, setScenarioUnitsA] = useState(savedState?.scenarioUnitsA || '');
+  const [scenarioUnitsB, setScenarioUnitsB] = useState(savedState?.scenarioUnitsB || '');
+  const [selectedScenarioSupplier, setSelectedScenarioSupplier] = useState(savedState?.selectedScenarioSupplier || 0);
 
   // ── Product Lookup ──
   const handleHSCodeChange = useCallback((value) => {
@@ -54,8 +64,8 @@ export default function TariffCalculator({ currency, convertAmount }) {
     setShowScenario(false);
     setLiveSuggestions([]);
 
-    // Try to find product by HS code
-    const product = getProductByHSCode(value);
+    // Try to find product by HS code or ERP code
+    const product = getProductByHSCode(value) || getProductByERPCode(value);
     if (product) {
       setSelectedProduct(product);
       const productSuppliers = getSuppliersForProduct(product.erpCode);
@@ -120,6 +130,14 @@ export default function TariffCalculator({ currency, convertAmount }) {
     setSupplierInputs(getInitialSupplierInputs(product, productSuppliers));
   }, []);
 
+  // ── Preselected Product Effect ──
+  useEffect(() => {
+    if (preselectedProduct) {
+      handleProductSelect(preselectedProduct);
+      clearPreselectedProduct();
+    }
+  }, [preselectedProduct, handleProductSelect, clearPreselectedProduct]);
+
   // ── Supplier Input Updates ──
   const updateSupplierInput = useCallback((index, field, value) => {
     setSupplierInputs(prev => {
@@ -136,6 +154,31 @@ export default function TariffCalculator({ currency, convertAmount }) {
       setCalcResult(result);
     }
   }, [supplierInputs, hsCode, destinationCountry, selectedProduct]);
+
+  // Persist calculator state to sessionStorage (preserves inputs and calculation results when switching sidebar tabs)
+  useEffect(() => {
+    const stateToSave = {
+      hsCode,
+      selectedProduct,
+      destinationCountry,
+      suppliers,
+      supplierInputs,
+      showScenario,
+      calcResult,
+      scenarioIncreasePct,
+      scenarioDecreasePct,
+      scenarioFobA,
+      scenarioFobB,
+      scenarioUnitsA,
+      scenarioUnitsB,
+      selectedScenarioSupplier,
+    };
+    sessionStorage.setItem('tariff_tracker_calculator_state', JSON.stringify(stateToSave));
+  }, [
+    hsCode, selectedProduct, destinationCountry, suppliers, supplierInputs,
+    showScenario, calcResult, scenarioIncreasePct, scenarioDecreasePct,
+    scenarioFobA, scenarioFobB, scenarioUnitsA, scenarioUnitsB, selectedScenarioSupplier
+  ]);
 
   // Handler for custom overrides from the breakdown card
   const handleOverrideChange = useCallback((supplierIndex, field, value, isRate) => {
@@ -200,7 +243,7 @@ export default function TariffCalculator({ currency, convertAmount }) {
   // ── Supplier Comparison ──
   const comparison = useMemo(() => {
     if (!calcResult || !calcResult.supplierResults || calcResult.supplierResults.length < 2) return null;
-    return compareSuppliers(calcResult.supplierResults[0], calcResult.supplierResults[1]);
+    return compareSuppliers(calcResult.supplierResults);
   }, [calcResult]);
 
   // ── Format helpers ──
@@ -849,11 +892,11 @@ export default function TariffCalculator({ currency, convertAmount }) {
 
               {/* Supplier selector for sensitivity matrix */}
               {calcResult.supplierResults.length > 1 && (
-                <div className="tabs" style={{ marginBottom: '20px' }}>
+                <div className="tab-group" style={{ marginBottom: '20px' }}>
                   {calcResult.supplierResults.map((r, idx) => (
                     <button
                       key={idx}
-                      className={`tab ${selectedScenarioSupplier === idx ? 'active' : ''}`}
+                      className={`tab-btn ${selectedScenarioSupplier === idx ? 'active' : ''}`}
                       onClick={() => setSelectedScenarioSupplier(idx)}
                       type="button"
                     >

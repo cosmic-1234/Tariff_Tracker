@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Layers, ShieldAlert, DollarSign, Activity, AlertTriangle, Filter, CheckCircle2 } from 'lucide-react';
+import { Layers, ShieldAlert, DollarSign, Activity, AlertTriangle, Filter, CheckCircle2, Calculator, HelpCircle } from 'lucide-react';
 import { getInventoryRiskRecords, getRiskSummary } from '../engine/inventoryAnalysis.js';
 import { DEFAULT_WEIGHTS_A, DEFAULT_WEIGHTS_B, DEFAULT_THRESHOLDS, clamp } from '../engine/riskScoringModel.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Treemap } from 'recharts';
+
 
 const CustomizedTreemapContent = (props) => {
   const { x, y, width, height, index, payload, name, value, currency, onClick, depth } = props;
@@ -250,6 +250,250 @@ function computeTreemapLayout(items, x, y, width, height) {
   }
 }
 
+// Recalculates risk scores step-by-step using local modal overrides and product info to show exact math
+function getCalculationDetails(product, localCrit, localTar, localCorr, config, activeModel) {
+  const thresholds = { ...DEFAULT_THRESHOLDS, ...config.thresholds };
+  const weightsA = { ...DEFAULT_WEIGHTS_A, ...config.weightsA };
+  const weightsB = { ...DEFAULT_WEIGHTS_B, ...config.weightsB };
+
+  // Daily Consumption
+  const dailyUse = product.daysOfCoverage > 0
+    ? product.inHandInventory / product.daysOfCoverage
+    : 1;
+
+  // Average Lead time
+  const suppliers = product.suppliers || [];
+  let ltAvg = 20;
+  let ltAvgFormula = '';
+  let ltAvgCalculation = '';
+  if (suppliers.length > 0) {
+    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
+    if (totalPct > 0) {
+      ltAvg = suppliers.reduce((sum, s) => sum + ((s.supplyPct || 0) / 100) * (s.leadTimeDays || 0), 0);
+      ltAvgFormula = 'Sum(Supply% * LT_days)';
+      ltAvgCalculation = suppliers.map(s => `(${s.supplyPct}% * ${s.leadTimeDays}d)`).join(' + ') + ` = ${ltAvg.toFixed(2)} days`;
+    } else {
+      ltAvg = suppliers.reduce((sum, s) => sum + (s.leadTimeDays || 0), 0) / suppliers.length;
+      ltAvgFormula = 'Sum(LT_days) / N';
+      ltAvgCalculation = `(${suppliers.map(s => `${s.leadTimeDays}d`).join(' + ')}) / ${suppliers.length} = ${ltAvg.toFixed(2)} days`;
+    }
+  } else {
+    ltAvgFormula = 'Fallback Default';
+    ltAvgCalculation = `Default value = 20.00 days (no suppliers available)`;
+  }
+
+  // Sigma LT
+  let sigmaLT = 5;
+  let sigmaLTFormula = '';
+  let sigmaLTCalculation = '';
+  if (suppliers.length > 0) {
+    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
+    const supplierSigmas = suppliers.map(s => {
+      const reliability = s.reliability || 90;
+      const sSigma = s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5);
+      return { s, reliability, sSigma };
+    });
+    
+    if (totalPct > 0) {
+      sigmaLT = supplierSigmas.reduce((sum, item) => sum + ((item.s.supplyPct || 0) / 100) * item.sSigma, 0);
+      sigmaLTFormula = 'Sum(Supply% * sSigma)';
+      sigmaLTCalculation = supplierSigmas.map(item => `(${item.s.supplyPct}% * [${item.s.leadTimeDays}d * (0.1 + (1 - ${item.reliability}/100) * 0.5)])`).join('\n+ ') + `\n= ${sigmaLT.toFixed(2)} days`;
+    } else {
+      sigmaLT = supplierSigmas.reduce((sum, item) => sum + item.sSigma, 0) / suppliers.length;
+      sigmaLTFormula = 'Sum(sSigma) / N';
+      sigmaLTCalculation = `(${supplierSigmas.map(item => `[${item.s.leadTimeDays}d * (0.1 + (1 - ${item.reliability}/100) * 0.5)]`).join(' + ')}) / ${suppliers.length} = ${sigmaLT.toFixed(2)} days`;
+    }
+  } else {
+    sigmaLTFormula = 'Fallback Default';
+    sigmaLTCalculation = `Default value = 5.00 days (no suppliers available)`;
+  }
+
+  // ROP
+  const rop = (dailyUse * ltAvg) + (product.safetyStock || 0);
+  const ropFormula = '(DailyUse * LT_avg) + SafetyStock';
+  const ropCalculation = `(${dailyUse.toFixed(2)} * ${ltAvg.toFixed(2)}) + ${product.safetyStock || 0} = ${rop.toFixed(2)} units`;
+
+  // k Ratio
+  const k = rop > 0 ? product.inHandInventory / rop : 1.2;
+  const kFormula = 'IL / ROP';
+  const kCalculation = `${product.inHandInventory} / ${rop.toFixed(2)} = ${k.toFixed(4)}`;
+
+  // --- Subscores ---
+  // P1
+  const r1 = clamp((thresholds.p1_safe - k) / (thresholds.p1_safe - thresholds.p1_crit));
+  const r1Formula = 'clamp((Safe_p1 - k) / (Safe_p1 - Crit_p1))';
+  const r1Calculation = `clamp((${thresholds.p1_safe} - ${k.toFixed(2)}) / (${thresholds.p1_safe} - ${thresholds.p1_crit})) = clamp(${(thresholds.p1_safe - k).toFixed(2)} / ${(thresholds.p1_safe - thresholds.p1_crit).toFixed(2)}) = ${r1.toFixed(2)}`;
+
+  // P2
+  const dosSafe = thresholds.p2_safeMultiplier * ltAvg;
+  const dosCrit = thresholds.p2_critMultiplier * ltAvg;
+  const doS = product.daysOfCoverage || 0;
+  const r2 = clamp((dosSafe - doS) / (dosSafe - dosCrit));
+  const r2Formula = 'clamp((dosSafe - DoS) / (dosSafe - dosCrit))';
+  const r2Calculation = `dosSafe = ${thresholds.p2_safeMultiplier} * ${ltAvg.toFixed(1)} = ${dosSafe.toFixed(1)}d, dosCrit = ${thresholds.p2_critMultiplier} * ${ltAvg.toFixed(1)} = ${dosCrit.toFixed(1)}d\nclamp((${dosSafe.toFixed(1)} - ${doS}) / (${dosSafe.toFixed(1)} - ${dosCrit.toFixed(1)})) = clamp(${(dosSafe - doS).toFixed(1)} / ${(dosSafe - dosCrit).toFixed(1)}) = ${r2.toFixed(2)}`;
+
+  // P3
+  const ssTarget = Math.max((product.safetyStock || 0) * 1.5, 5);
+  const ssNow = product.safetyStock || 0;
+  const r3 = clamp((ssTarget - ssNow) / ssTarget);
+  const r3Formula = 'clamp((ssTarget - ssNow) / ssTarget)';
+  const r3Calculation = `ssTarget = max(${ssNow} * 1.5, 5) = ${ssTarget.toFixed(1)}\nclamp((${ssTarget.toFixed(1)} - ${ssNow}) / ${ssTarget.toFixed(1)}) = ${r3.toFixed(2)}`;
+
+  // P4
+  const ltEff = ltAvg + 1.65 * sigmaLT;
+  const r4 = clamp((ltEff - thresholds.p4_safe) / (thresholds.p4_crit - thresholds.p4_safe));
+  const r4Formula = 'clamp((ltEff - Safe_p4) / (Crit_p4 - Safe_p4))';
+  const r4Calculation = `ltEff = ${ltAvg.toFixed(1)} + (1.65 * ${sigmaLT.toFixed(1)}) = ${ltEff.toFixed(1)}d\nclamp((${ltEff.toFixed(1)} - ${thresholds.p4_safe}) / (${thresholds.p4_crit} - ${thresholds.p4_safe})) = clamp(${(ltEff - thresholds.p4_safe).toFixed(1)} / ${(thresholds.p4_crit - thresholds.p4_safe).toFixed(1)}) = ${r4.toFixed(2)}`;
+
+  // P5 concentration
+  let rConc = 1.0;
+  let rConcFormula = '';
+  let rConcCalculation = '';
+  if (suppliers.length > 1) {
+    const hhi = suppliers.reduce((sum, s) => sum + Math.pow((s.supplyPct || 0) / 100, 2), 0);
+    const n = suppliers.length;
+    rConc = (hhi - 1 / n) / (1 - 1 / n);
+    rConcFormula = '(HHI - 1/N) / (1 - 1/N)';
+    rConcCalculation = `HHI = ${suppliers.map(s => `(${s.supplyPct}%/100)^2`).join(' + ')} = ${hhi.toFixed(3)}\n(${hhi.toFixed(3)} - 1/${n}) / (1 - 1/${n}) = ${rConc.toFixed(2)}`;
+  } else {
+    rConcFormula = 'Fallback Single Supplier';
+    rConcCalculation = `Only ${suppliers.length} supplier(s), HHI concentration score = 1.00`;
+  }
+
+  // P5 OTIF reliability
+  let otifAvg = 0.90;
+  let otifAvgFormula = '';
+  let otifAvgCalculation = '';
+  if (suppliers.length > 0) {
+    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
+    if (totalPct > 0) {
+      otifAvg = suppliers.reduce((sum, s) => sum + ((s.supplyPct || 0) / 100) * ((s.reliability || 90) / 100), 0);
+      otifAvgFormula = 'Sum(Supply% * Reliability%)';
+      otifAvgCalculation = suppliers.map(s => `(${s.supplyPct}% * ${s.reliability}%)`).join(' + ') + ` = ${(otifAvg*100).toFixed(1)}%`;
+    } else {
+      otifAvg = suppliers.reduce((sum, s) => sum + (s.reliability || 90), 0) / suppliers.length / 100;
+      otifAvgFormula = 'Sum(Reliability%) / N';
+      otifAvgCalculation = `(${suppliers.map(s => `${s.reliability}%`).join(' + ')}) / ${suppliers.length} = ${(otifAvg*100).toFixed(1)}%`;
+    }
+  } else {
+    otifAvgFormula = 'Fallback Default';
+    otifAvgCalculation = `Default value = 90.0% (no suppliers available)`;
+  }
+  const rOtif = clamp((thresholds.p5_otifTarget - otifAvg) / (thresholds.p5_otifTarget - thresholds.p5_otifFloor));
+  const rOtifFormula = 'clamp((otifTarget - otifAvg) / (otifTarget - otifFloor))';
+  const rOtifCalculation = `clamp((${thresholds.p5_otifTarget} - ${otifAvg.toFixed(3)}) / (${thresholds.p5_otifTarget} - ${thresholds.p5_otifFloor})) = ${rOtif.toFixed(2)}`;
+
+  const r5 = 0.5 * rConc + 0.5 * rOtif;
+  const r5Formula = '0.5 * Concentration + 0.5 * OTIF';
+  const r5Calculation = `0.5 * ${rConc.toFixed(2)} + 0.5 * ${rOtif.toFixed(2)} = ${r5.toFixed(2)}`;
+
+  // P6 Criticality
+  const r6 = localCrit;
+  const r6Formula = 'Category Base Score (or Custom Override)';
+  const r6Calculation = `Criticality Rating = ${r6.toFixed(2)}`;
+
+  // P7 Tariff
+  const r7 = localTar.severity * localTar.probability * localTar.relevance;
+  const r7Formula = 'Severity * Probability * Relevance';
+  const r7Calculation = `${localTar.severity.toFixed(1)} * ${localTar.probability.toFixed(1)} * ${localTar.relevance.toFixed(1)} = ${r7.toFixed(2)}`;
+
+  // P8 Corridor Threat
+  const coreThreat = 0.5 * localCorr.severity + 0.3 * localCorr.probability + 0.2 * localCorr.persistence;
+  const r8 = localCorr.relevance * coreThreat;
+  const r8Formula = 'Relevance * (0.5 * Sev + 0.3 * Prob + 0.2 * Pers)';
+  const r8Calculation = `CoreThreat = (0.5 * ${localCorr.severity.toFixed(1)} + 0.3 * ${localCorr.probability.toFixed(1)} + 0.2 * ${localCorr.persistence.toFixed(1)}) = ${coreThreat.toFixed(2)}\n${localCorr.relevance.toFixed(1)} * ${coreThreat.toFixed(2)} = ${r8.toFixed(2)}`;
+
+  // --- Model A Sum ---
+  const weightedSumParts = [
+    { name: 'P1: Inventory Level', score: r1, weight: weightsA.p1_invLevel },
+    { name: 'P2: Days of Supply', score: r2, weight: weightsA.p2_daysOfSupply },
+    { name: 'P3: Safety Stock Shortfall', score: r3, weight: weightsA.p3_safetyStock },
+    { name: 'P4: Effective Lead Time', score: r4, weight: weightsA.p4_leadTime },
+    { name: 'P5: Supplier Dependence', score: r5, weight: weightsA.p5_supplierDep },
+    { name: 'P6: Inventory Criticality', score: r6, weight: weightsA.p6_criticality },
+    { name: 'P7: Tariff Changes', score: r7, weight: weightsA.p7_tariffNews },
+    { name: 'P8: Corridor Threats', score: r8, weight: weightsA.p8_corridorNews },
+  ];
+  const modelASumProd = weightedSumParts.reduce((sum, part) => sum + part.score * part.weight, 0);
+  const scoreA = 100 * modelASumProd;
+
+  // --- Model B Likelihood x Impact ---
+  const likelihoodParts = [
+    { name: 'P1: Inventory Level', score: r1, weight: weightsB.p1_invLevel },
+    { name: 'P2: Days of Supply', score: r2, weight: weightsB.p2_daysOfSupply },
+    { name: 'P3: Safety Stock Shortfall', score: r3, weight: weightsB.p3_safetyStock },
+    { name: 'P4: Effective Lead Time', score: r4, weight: weightsB.p4_leadTime },
+    { name: 'P5: Supplier Dependence', score: r5, weight: weightsB.p5_supplierDep },
+    { name: 'P7: Tariff Changes', score: r7, weight: weightsB.p7_tariffNews },
+    { name: 'P8: Corridor Threats', score: r8, weight: weightsB.p8_corridorNews },
+  ];
+  const likelihood = likelihoodParts.reduce((sum, part) => sum + part.score * part.weight, 0);
+  const impact = 0.4 + 0.6 * r6;
+  const scoreB = 100 * likelihood * impact;
+
+  // Floor Override
+  let scoreFinal = scoreB;
+  let hasOverride = false;
+  const maxOverrideVal = Math.max(r2, r7, r8);
+  if (maxOverrideVal >= 0.90) {
+    scoreFinal = Math.max(scoreB, 70);
+    hasOverride = true;
+  }
+
+  return {
+    inputs: {
+      inHandInventory: product.inHandInventory,
+      daysOfCoverage: product.daysOfCoverage,
+      safetyStock: product.safetyStock || 0,
+      category: product.category,
+      suppliers,
+    },
+    thresholds,
+    weightsA,
+    weightsB,
+    intermediates: {
+      dailyUse,
+      ltAvg,
+      ltAvgFormula,
+      ltAvgCalculation,
+      sigmaLT,
+      sigmaLTFormula,
+      sigmaLTCalculation,
+      ltEff,
+      rop,
+      ropFormula,
+      ropCalculation,
+      k,
+      kFormula,
+      kCalculation,
+    },
+    subScores: {
+      r1: { score: r1, formula: r1Formula, calculation: r1Calculation },
+      r2: { score: r2, formula: r2Formula, calculation: r2Calculation },
+      r3: { score: r3, formula: r3Formula, calculation: r3Calculation },
+      r4: { score: r4, formula: r4Formula, calculation: r4Calculation },
+      r5: { score: r5, formula: r5Formula, calculation: r5Calculation, parts: { rConc, rConcFormula, rConcCalculation, rOtif, rOtifFormula, rOtifCalculation, otifAvg, otifAvgFormula, otifAvgCalculation } },
+      r6: { score: r6, formula: r6Formula, calculation: r6Calculation },
+      r7: { score: r7, formula: r7Formula, calculation: r7Calculation },
+      r8: { score: r8, formula: r8Formula, calculation: r8Calculation },
+    },
+    modelA: {
+      parts: weightedSumParts,
+      sumProd: modelASumProd,
+      score: scoreA,
+    },
+    modelB: {
+      parts: likelihoodParts,
+      likelihood,
+      impact,
+      score: scoreB,
+      hasOverride,
+      maxOverrideVal,
+      scoreFinal,
+    }
+  };
+}
+
 export default function RiskEngine({ currency, convertAmount }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCell, setSelectedCell] = useState(null); // format: { sde: 'S', ved: 'V' }
@@ -260,6 +504,7 @@ export default function RiskEngine({ currency, convertAmount }) {
   // --- Advanced 0-100 Risk Model State ---
   const [activeModel, setActiveModel] = useState('ModelB'); // 'ModelB' (Likelihood * Impact) or 'ModelA' (Weighted Sum)
   const [selectedProductForModal, setSelectedProductForModal] = useState(null);
+  const [showCalculationDetails, setShowCalculationDetails] = useState(false);
   
   // Custom multi-criteria Option B scoring rubric states
   const [optionBAnswers, setOptionBAnswers] = useState({}); // { erpCode: [4, 4, 3, 4] }
@@ -279,53 +524,7 @@ export default function RiskEngine({ currency, convertAmount }) {
   const [hoveredCard, setHoveredCard] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
-  // Draggable Splitter Layout states and hooks
-  const [splitPercent, setSplitPercent] = useState(42); // default 42% for treemap
-  const [isDragging, setIsDragging] = useState(false);
-  const gridRef = useRef(null);
 
-  const handleMouseDown = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleTouchStart = () => {
-    setIsDragging(true);
-  };
-
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const handleMouseMove = (e) => {
-      if (!gridRef.current) return;
-      const rect = gridRef.current.getBoundingClientRect();
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const relativeX = clientX - rect.left;
-      let pct = (relativeX / rect.width) * 100;
-      
-      // Maintain reasonable ratios (25% - 75%) so cards don't squish completely
-      if (pct < 25) pct = 25;
-      if (pct > 75) pct = 75;
-      
-      setSplitPercent(pct);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    window.addEventListener('touchmove', handleMouseMove);
-    window.addEventListener('touchend', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      window.removeEventListener('touchmove', handleMouseMove);
-      window.removeEventListener('touchend', handleMouseUp);
-    };
-  }, [isDragging]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -348,34 +547,7 @@ export default function RiskEngine({ currency, convertAmount }) {
   // Format currencies helper
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);
 
-  // Sorting products by Risk score (descending) for the area chart
-  const chartData = useMemo(() => {
-    return [...records]
-      .sort((a, b) => b.scoreFinal - a.scoreFinal)
-      .map(r => ({
-        erpCode: r.erpCode,
-        description: r.description,
-        value: convertAmount(r.inventoryValue),
-        riskValue: r.scoreFinal,
-        riskLevel: r.riskBand,
-        sdeClass: r.sdeClass,
-        vedClass: r.vedClass
-      }));
-  }, [records, convertAmount]);
 
-  // Calculate dynamic stops for the Area chart gradient based on product counts
-  const gradientStops = useMemo(() => {
-    const total = chartData.length;
-    if (total === 0) return { critStop: 0, medStop: 0 };
-    
-    const critCount = chartData.filter(r => r.riskLevel === 'Critical').length;
-    const medCount = chartData.filter(r => r.riskLevel === 'High' || r.riskLevel === 'Moderate').length;
-    
-    const critStop = (critCount / total) * 100;
-    const medStop = ((critCount + medCount) / total) * 100;
-    
-    return { critStop, medStop };
-  }, [chartData]);
 
   // Treemap grouped data processing (Hierarchical tree structure)
   const treemapData = useMemo(() => {
@@ -680,32 +852,7 @@ export default function RiskEngine({ currency, convertAmount }) {
     setSearchTerm('');
   };
 
-  // Custom chart tooltip
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="glass-card" style={{ padding: '12px', border: '1px solid var(--border-medium)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-lg)' }}>
-          <div style={{ fontWeight: 600, color: 'var(--text-bright)', marginBottom: '4px' }}>{data.description}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: '8px' }}>ERP: {data.erpCode}</div>
-          <div style={{ fontSize: '13px', display: 'flex', justifyContent: 'space-between', gap: '20px', marginBottom: '4px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>Inventory Value:</span>
-            <span style={{ fontWeight: 600, color: 'var(--success)' }}>{formatCurrency(data.value, currency)}</span>
-          </div>
-          <div style={{ fontSize: '13px', display: 'flex', justifyContent: 'space-between', gap: '20px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>SDE * VED Score:</span>
-            <span style={{ 
-              fontWeight: 700, 
-              color: data.riskLevel === 'Critical' ? 'var(--danger)' : data.riskLevel === 'Medium' ? 'var(--warning)' : 'var(--success)' 
-            }}>
-              {data.riskValue.toFixed(1)} ({data.sdeClass}*{data.vedClass})
-            </span>
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
+
 
   // --- Modal Local State & Synchronization Effect ---
   const [localCriticality, setLocalCriticality] = useState(0.5);
@@ -782,7 +929,7 @@ export default function RiskEngine({ currency, convertAmount }) {
               Aggregate raw parameters into a single comparable scale using weighted average or likelihood × impact algorithms.
             </p>
           </div>
-          
+
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
             <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
               <button
@@ -810,8 +957,8 @@ export default function RiskEngine({ currency, convertAmount }) {
                 Model A: Weighted Sum
               </button>
             </div>
-            
-            <button 
+
+            <button
               className="btn btn-secondary btn-sm"
               onClick={() => setShowWeightsConfig(!showWeightsConfig)}
             >
@@ -831,7 +978,7 @@ export default function RiskEngine({ currency, convertAmount }) {
                   const label = key.replace('p', 'P').replace('_', ' ').replace('inv', 'Inventory ').replace('daysOfSupply', 'Days of Supply').replace('safetyStock', 'Safety Stock Shortfall').replace('leadTime', 'Effective Lead Time').replace('supplierDep', 'Supplier Dependence').replace('criticality', 'Inventory Criticality').replace('tariffNews', 'Tariff Changes (News)').replace('corridorNews', 'Corridor Threats (News)');
                   const currentWeights = activeModel === 'ModelA' ? config.weightsA : config.weightsB;
                   const currentVal = currentWeights[key];
-                  
+
                   return (
                     <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
@@ -937,589 +1084,6 @@ export default function RiskEngine({ currency, convertAmount }) {
             </div>
           </div>
         )}
-      </div>
-
-      {/* 2. Heatmap Matrix & Risk Area Chart Draggable Split Layout */}
-      <div 
-        ref={gridRef}
-        style={{ 
-          display: 'flex', 
-          width: '100%', 
-          gap: '12px',
-          alignItems: 'stretch',
-          position: 'relative',
-          userSelect: isDragging ? 'none' : 'auto'
-        }}
-      >
-        
-        {/* Left Side: Visual SDE/VED Classification Card */}
-        <div 
-          className="glass-card animate-slide-up" 
-          style={{ 
-            width: `${splitPercent}%`, 
-            minWidth: '350px', 
-            display: 'flex', 
-            flexDirection: 'column', 
-            minHeight: '430px',
-            margin: 0 
-          }}
-        >
-          
-          {/* Card Header with Title and Tab Selector */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
-            <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <ShieldAlert size={18} className="icon" />
-              {viewMode === 'treemap' ? 'SDE & VED Cash Sourcing Treemap' : 'SDE & VED Elastic Marimekko Grid'}
-            </div>
-            
-            {/* View Mode Switcher Pills */}
-            <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-              <button
-                onClick={() => setViewMode('treemap')}
-                className={`tab ${viewMode === 'treemap' ? 'active' : ''}`}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  background: viewMode === 'treemap' ? 'var(--accent-gradient)' : 'transparent',
-                  color: viewMode === 'treemap' ? 'white' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontFamily: "'Inter', sans-serif"
-                }}
-              >
-                Treemap View
-              </button>
-              <button
-                onClick={() => setViewMode('matrix')}
-                className={`tab ${viewMode === 'matrix' ? 'active' : ''}`}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  background: viewMode === 'matrix' ? 'var(--accent-gradient)' : 'transparent',
-                  color: viewMode === 'matrix' ? 'white' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontFamily: "'Inter', sans-serif"
-                }}
-              >
-                3x3 Matrix Grid
-              </button>
-            </div>
-          </div>
-
-          {/* Conditional Subtitle & Grouping Filters */}
-          {viewMode === 'treemap' ? (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Click cells to filter table below. Tile size represents inventory cash value.
-              </div>
-              
-              {/* Group by pill tabs */}
-              <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '2.5px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                {['product', 'country', 'category', 'cell'].map(g => (
-                  <button
-                    key={g}
-                    onClick={() => setTreemapGroup(g)}
-                    style={{
-                      padding: '3px 8px',
-                      fontSize: '10.5px',
-                      border: 'none',
-                      borderRadius: 'var(--radius-xs)',
-                      background: treemapGroup === g ? 'var(--text-primary)' : 'transparent',
-                      color: treemapGroup === g ? 'var(--bg-primary)' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                      fontFamily: "'Inter', sans-serif"
-                    }}
-                  >
-                    {g === 'product' ? 'Products' : g === 'country' ? 'Countries' : g === 'category' ? 'Categories' : 'SDE-VED'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-              Click cells to filter products below. The size of columns (SDE) and rows (VED) are proportional to the cash value locked up.
-            </div>
-          )}
-
-          {/* Visual Container (Proportional Packed HTML Treemap) */}
-          {viewMode === 'treemap' ? (
-            <div 
-              style={{ 
-                position: 'relative', 
-                width: '100%', 
-                height: '260px', 
-                flex: 1, 
-                minHeight: '260px'
-              }}
-            >
-              {/* Inner clipping container */}
-              <div
-                ref={containerRef}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  overflow: 'hidden',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-subtle)',
-                  position: 'relative'
-                }}
-              >
-                {(() => {
-                  const leafNodes = [];
-                  treemapData.forEach(parent => {
-                    if (parent.children) {
-                      parent.children.forEach(child => {
-                        leafNodes.push(child);
-                      });
-                    } else {
-                      leafNodes.push(parent);
-                    }
-                  });
-
-                  const layoutCards = computeTreemapLayout(
-                    leafNodes.sort((a, b) => b.value - a.value),
-                    0,
-                    0,
-                    dimensions.width,
-                    dimensions.height
-                  );
-
-                  return layoutCards.map((card, idx) => {
-                    let bgColor = '#3f6212';
-                    if (card.riskLevel === 'Critical') {
-                      bgColor = '#a82b2b';
-                    } else if (card.riskLevel === 'High') {
-                      bgColor = '#c25e1a';
-                    } else if (card.riskLevel === 'Moderate' || card.riskLevel === 'Medium') {
-                      bgColor = '#dbaf58';
-                    }
-                    
-                    const isLightTheme = document.documentElement.classList.contains('light-theme');
-
-                    return (
-                      <div
-                        key={card.erpCode || card.name || idx}
-                        onClick={() => handleTreemapClick(card)}
-                        onMouseEnter={() => setHoveredCard(card)}
-                        onMouseMove={(e) => {
-                          const rect = e.currentTarget.parentElement.getBoundingClientRect();
-                          setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-                        }}
-                        onMouseLeave={() => setHoveredCard(null)}
-                        style={{
-                          position: 'absolute',
-                          left: `${card.x}px`,
-                          top: `${card.y}px`,
-                          width: `${card.w}px`,
-                          height: `${card.h}px`,
-                          padding: '6px',
-                          boxSizing: 'border-box',
-                          background: bgColor,
-                          border: isLightTheme ? '2px solid #ffffff' : '2px solid var(--bg-secondary)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                          alignItems: 'center',
-                          color: '#ffffff',
-                          cursor: 'pointer',
-                          overflow: 'hidden',
-                          transition: 'transform 0.15s ease-out, filter 0.15s ease-out',
-                          textShadow: '0 1.5px 3px rgba(0, 0, 0, 0.85)',
-                        }}
-                        className="treemap-rect"
-                      >
-                        {/* Name */}
-                        <div
-                          style={{
-                            fontWeight: 800,
-                            fontSize: card.w > 120 ? '13px' : card.w > 80 ? '11px' : '9px',
-                            lineHeight: 1.2,
-                            textAlign: 'center',
-                            width: '100%',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            display: '-webkit-box',
-                            WebkitLineClamp: card.h > 55 ? 3 : 2,
-                            WebkitBoxOrient: 'vertical',
-                            marginBottom: '2px',
-                            pointerEvents: 'none'
-                          }}
-                        >
-                          {card.name}
-                        </div>
-                        
-                        {/* Value */}
-                        {card.h > 45 && (
-                          <div
-                            style={{
-                              fontWeight: 800,
-                              fontSize: card.w > 120 ? '14px' : card.w > 80 ? '11px' : '9px',
-                              opacity: 0.95,
-                              textAlign: 'center',
-                              pointerEvents: 'none'
-                            }}
-                          >
-                            {card.formattedValue}
-                          </div>
-                        )}
-
-                        {/* Info Badge */}
-                        {card.w > 95 && card.h > 70 && (
-                          <div
-                            style={{
-                              fontSize: '8.5px',
-                              fontWeight: 700,
-                              marginTop: '4px',
-                              background: 'rgba(0, 0, 0, 0.22)',
-                              padding: '1.5px 5px',
-                              borderRadius: '3px',
-                              letterSpacing: '0.3px',
-                              textTransform: 'uppercase',
-                              pointerEvents: 'none'
-                            }}
-                          >
-                            {card.erpCode || `${card.sdeClass}*${card.vedClass}`}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-
-              {/* Cursor-Following Glassmorphic Tooltip (outside overflow: hidden sibling!) */}
-              {hoveredCard && (
-                <div 
-                  className="glass-card animate-scale-in" 
-                  style={{ 
-                    position: 'absolute',
-                    left: `${mousePos.x > dimensions.width - 250 ? mousePos.x - 240 - 15 : mousePos.x + 15}px`,
-                    top: `${mousePos.y > dimensions.height - 200 ? mousePos.y - 180 - 15 : mousePos.y + 15}px`,
-                    zIndex: 10000,
-                    padding: '14px', 
-                    border: '1px solid var(--border-strong)', 
-                    background: 'var(--bg-secondary)', 
-                    boxShadow: 'var(--shadow-xl)',
-                    borderRadius: 'var(--radius-md)',
-                    width: '240px',
-                    pointerEvents: 'none',
-                    backdropFilter: 'blur(12px)',
-                    boxSizing: 'border-box'
-                  }}
-                >
-                  <div style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '13px', marginBottom: '4px' }}>
-                    {hoveredCard.name}
-                  </div>
-                  
-                  {hoveredCard.erpCode ? (
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: '8px' }}>
-                      ERP: {hoveredCard.erpCode} · Category: {hoveredCard.category}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '8px' }}>
-                      Segment: {treemapGroup === 'country' ? 'Sourcing Country' : treemapGroup === 'category' ? 'Product Category' : 'SDE-VED Cell'}
-                    </div>
-                  )}
-
-                  <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Inventory Value:</span>
-                      <span style={{ fontWeight: 700, color: 'var(--success)' }}>{hoveredCard.formattedValue}</span>
-                    </div>
-                    
-                    <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Sourcing SDE*VED:</span>
-                      <span style={{ fontWeight: 700, color: hoveredCard.riskLevel === 'Critical' ? 'var(--danger)' : hoveredCard.riskLevel === 'Medium' ? 'var(--warning)' : 'var(--success)' }}>
-                        {hoveredCard.riskValue.toFixed(1)} ({hoveredCard.sdeClass}*{hoveredCard.vedClass})
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Risk Level:</span>
-                      <span style={{ fontWeight: 750, color: hoveredCard.riskLevel === 'Critical' ? 'var(--danger)' : hoveredCard.riskLevel === 'Medium' ? 'var(--warning)' : 'var(--success)', textTransform: 'uppercase', fontSize: '10px' }}>
-                        {hoveredCard.riskLevel}
-                      </span>
-                    </div>
-
-                    {hoveredCard.itemsCount > 1 && (
-                      <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>Components:</span>
-                        <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>{hoveredCard.itemsCount} items</span>
-                      </div>
-                    )}
-                    
-                    {hoveredCard.maxLeadTime && (
-                      <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>Max Lead Time:</span>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{hoveredCard.maxLeadTime} days</span>
-                      </div>
-                    )}
-
-                    {hoveredCard.numSuppliers && (
-                      <div style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>Suppliers:</span>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{hoveredCard.numSuppliers} active</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '30px 1fr', gap: '8px', flex: 1, minHeight: '260px' }}>
-              {/* VED Y-Axis Label aligned with row heights */}
-              <div 
-                style={{ 
-                  display: 'grid', 
-                  gridTemplateRows: `${rowHeights[0]}fr ${rowHeights[1]}fr ${rowHeights[2]}fr`,
-                  gap: '8px',
-                  alignItems: 'center', 
-                  justifyContent: 'center',
-                  fontWeight: 600, 
-                  color: 'var(--text-muted)', 
-                  fontSize: '12px',
-                  transition: 'grid-template-rows 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-                }}
-              >
-                <div>V</div>
-                <div>E</div>
-                <div>D</div>
-              </div>
-
-              <div 
-                style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: `${colWidths[0]}fr ${colWidths[1]}fr ${colWidths[2]}fr`,
-                  gap: '8px', 
-                  flex: 1,
-                  transition: 'grid-template-columns 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-                }}
-              >
-                {columns.map((col, colIdx) => {
-                  const heights = getCellHeightsForColumn(col);
-                  return (
-                    <div 
-                      key={col} 
-                      style={{ 
-                        display: 'grid', 
-                        gridTemplateRows: `${heights[0]}fr ${heights[1]}fr ${heights[2]}fr`,
-                        gap: '8px',
-                        transition: 'grid-template-rows 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-                      }}
-                    >
-                      {rows.map((row, rowIdx) => {
-                        const cellData = getMatrixCellData(col, row);
-                        const isSelected = selectedCell && selectedCell.sde === col && selectedCell.ved === row;
-                        return (
-                          <div key={row} className="tooltip-container" style={{ width: '100%', height: '100%', display: 'flex', position: 'relative' }}>
-                            <div
-                              onClick={() => setSelectedCell(isSelected ? null : { sde: col, ved: row })}
-                              className={`matrix-cell ${cellData.colorClass} ${isSelected ? 'selected' : ''}`}
-                              style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                borderRadius: 'var(--radius-md)',
-                                cursor: 'pointer',
-                                border: isSelected ? '2px solid var(--text-bright)' : '1px solid var(--border-subtle)',
-                                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-                                boxShadow: isSelected ? 'var(--accent-glow)' : 'none',
-                                padding: '8px',
-                                minWidth: 0,
-                                overflow: 'hidden',
-                                textAlign: 'center',
-                                flex: 1
-                              }}
-                            >
-                              <div style={{ fontSize: '11px', fontWeight: 700, opacity: 0.9, marginBottom: '2px' }}>{col}-{row}</div>
-                              <div style={{ fontSize: '13px', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                                {cellData.count} <span style={{ fontSize: '10px', fontWeight: 400, opacity: 0.7 }}>items</span>
-                              </div>
-                              <div style={{ fontSize: '11px', fontWeight: 600, opacity: 0.8, whiteSpace: 'nowrap' }}>{fmt(cellData.value)}</div>
-                            </div>
-                            
-                            {/* Premium Custom Hover Tooltip */}
-                            <div className="tooltip" style={{ bottom: 'calc(100% + 6px)', padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-xl)', pointerEvents: 'none', transform: 'translateX(-50%)', left: '50%' }}>
-                              <div style={{ fontWeight: 700, color: 'var(--text-bright)', marginBottom: '6px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', whiteSpace: 'nowrap' }}>
-                                {col === 'S' ? 'Scarce' : col === 'D' ? 'Difficult' : 'Easy'} · {row === 'V' ? 'Vital' : row === 'E' ? 'Essential' : 'Desirable'} ({col}-{row})
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', fontSize: '11px', marginBottom: '3px', whiteSpace: 'nowrap' }}>
-                                <span style={{ color: 'var(--text-muted)' }}>Items Count:</span>
-                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{cellData.count} components</span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                                <span style={{ color: 'var(--text-muted)' }}>Inventory Value:</span>
-                                <span style={{ fontWeight: 600, color: 'var(--success)' }}>{fmt(cellData.value)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* SDE X-Axis Labels aligned with column widths (Only shown in Matrix Mode) */}
-          {viewMode === 'matrix' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '30px 1fr', gap: '8px', marginTop: '8px' }}>
-              <div></div> {/* spacer for VED label column */}
-              <div 
-                style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: `${colWidths[0]}fr ${colWidths[1]}fr ${colWidths[2]}fr`,
-                  gap: '8px', 
-                  textAlign: 'center', 
-                  fontWeight: 600, 
-                  color: 'var(--text-muted)', 
-                  fontSize: '11px',
-                  transition: 'grid-template-columns 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-                }}
-              >
-                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Scarce (S)</div>
-                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Difficult (D)</div>
-                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Easy (E)</div>
-              </div>
-            </div>
-          )}
-          
-          {/* Bottom Scale Scale/Gradient Legend (Styled to match the slide EXACTLY) */}
-          {viewMode === 'treemap' ? (
-            <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>SDE * VED Sourcing Risk Scale (Gradient Legend)</span>
-                <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Proportional Size By Value</span>
-              </div>
-              <div style={{ position: 'relative', height: '14px', borderRadius: '4px', background: 'linear-gradient(90deg, #a82b2b 0%, #dbaf58 50%, #3f6212 100%)', border: '1px solid var(--border-medium)' }}>
-                {/* Visual scale ticks */}
-                <div style={{ position: 'absolute', top: 0, bottom: 0, left: '20%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-                <div style={{ position: 'absolute', top: 0, bottom: 0, left: '40%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-                <div style={{ position: 'absolute', top: 0, bottom: 0, left: '60%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-                <div style={{ position: 'absolute', top: 0, bottom: 0, left: '80%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 2px 0', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, fontFamily: 'monospace' }}>
-                <div style={{ textAlign: 'left' }}>
-                  <span style={{ color: 'var(--danger)', fontSize: '11px', fontWeight: 750 }}>25.0</span>
-                  <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--danger)', marginTop: '2px' }}>CRITICAL RISK</div>
-                </div>
-                <div style={{ textAlign: 'center', transform: 'translateX(-10px)' }}>
-                  <span>15.0</span>
-                  <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>HIGH</div>
-                </div>
-                <div style={{ textAlign: 'center', transform: 'translateX(10px)' }}>
-                  <span>6.0</span>
-                  <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>MEDIUM</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span style={{ color: 'var(--success)', fontSize: '11px', fontWeight: 750 }}>1.0</span>
-                  <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--success)', marginTop: '2px' }}>LOW RISK</div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', fontSize: '11.5px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'var(--danger-bg)', border: '1px solid var(--danger)' }}></span> Critical Risk</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'var(--warning-bg)', border: '1px solid var(--warning)' }}></span> Medium Risk</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'var(--success-bg)', border: '1px solid var(--success)' }}></span> Low Risk</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Dynamic Resizer Divider Handle */}
-        <div 
-          onMouseDown={handleMouseDown}
-          onTouchStart={handleTouchStart}
-          style={{
-            width: '8px',
-            cursor: 'col-resize',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: isDragging ? 'var(--accent-primary)' : 'transparent',
-            borderRadius: '4px',
-            transition: 'background 0.2s',
-            margin: '0 -2px',
-            zIndex: 10
-          }}
-          className="layout-resizer"
-        >
-          <div style={{ width: '2px', height: '30px', background: 'var(--border-strong)', borderRadius: '1px' }}></div>
-        </div>
-
-        {/* Right Side: Recharts Risk Area Chart */}
-        <div 
-          className="glass-card animate-slide-up" 
-          style={{ 
-            flex: 1, 
-            minWidth: '350px', 
-            display: 'flex', 
-            flexDirection: 'column',
-            margin: 0
-          }}
-        >
-          <div className="card-title">
-            <Activity size={18} className="icon" />
-            Inventory Value vs Risk Exposure Curve
-          </div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-            Products sorted from Critical (left) to Low Risk (right). The area reflects locked-up capital, colored by SDE*VED risk.
-          </div>
-
-          <div style={{ width: '100%', overflowX: 'auto', paddingBottom: '12px', flex: 1 }} className="custom-scrollbar">
-            <div style={{ width: '1500px', height: '230px' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 10, right: 15, left: -5, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorRiskArea" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="var(--danger)" stopOpacity={0.65} />
-                      <stop offset={`${gradientStops.critStop}%`} stopColor="var(--danger)" stopOpacity={0.65} />
-                      <stop offset={`${gradientStops.critStop + 1}%`} stopColor="var(--warning)" stopOpacity={0.55} />
-                      <stop offset={`${gradientStops.medStop}%`} stopColor="var(--warning)" stopOpacity={0.55} />
-                      <stop offset={`${gradientStops.medStop + 1}%`} stopColor="var(--success)" stopOpacity={0.45} />
-                      <stop offset="100%" stopColor="var(--success)" stopOpacity={0.45} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
-                  <XAxis 
-                    dataKey="erpCode" 
-                    stroke="var(--text-muted)" 
-                    fontSize={10} 
-                    tickLine={false} 
-                    axisLine={false}
-                    dy={8}
-                  />
-                  <YAxis 
-                    stroke="var(--text-muted)" 
-                    fontSize={10} 
-                    tickLine={false} 
-                    axisLine={false}
-                    tickFormatter={(val) => currency === 'INR' ? `₹${(val/100000).toFixed(0)}L` : `$${(val/1000).toFixed(0)}k`}
-                  />
-                  <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--border-strong)', strokeWidth: 1 }} />
-                  <Area 
-                    type="monotone" 
-                    dataKey="value" 
-                    stroke="var(--border-strong)" 
-                    strokeWidth={1.5}
-                    fill="url(#colorRiskArea)" 
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* 3. Detailed Records Table */}
@@ -2009,16 +1573,24 @@ export default function RiskEngine({ currency, convertAmount }) {
 
               {/* Modal Footer */}
               <div style={{
-                display: 'flex', justifyContent: 'flex-end', gap: '10px',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '14px 20px', borderTop: '1px solid var(--border-subtle)',
                 background: 'var(--bg-tertiary)'
               }}>
                 <button 
                   className="btn btn-secondary"
-                  onClick={() => setSelectedProductForModal(null)}
+                  onClick={() => setShowCalculationDetails(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', borderColor: 'var(--border-strong)', color: 'var(--text-accent)' }}
                 >
-                  Cancel
+                  <Calculator size={14} /> View Math Details
                 </button>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button 
+                    className="btn btn-secondary"
+                    onClick={() => setSelectedProductForModal(null)}
+                  >
+                    Cancel
+                  </button>
                 <button 
                   className="btn btn-primary"
                   onClick={() => {
@@ -2052,6 +1624,433 @@ export default function RiskEngine({ currency, convertAmount }) {
                   }}
                 >
                   Save Calibration & Recalculate
+                </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* --- Detailed Math Explanation Sub-Modal --- */}
+      {showCalculationDetails && selectedProductForModal && (() => {
+        const p = records.find(r => r.erpCode === selectedProductForModal.erpCode) || selectedProductForModal;
+        const calc = getCalculationDetails(p, localCriticality, localTariff, localCorridor, config, activeModel);
+        const activeScore = activeModel === 'ModelA' ? calc.modelA.score : calc.modelB.scoreFinal;
+        const isModelB = activeModel === 'ModelB';
+
+        return (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(10px)',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+            zIndex: 3000, overflowY: 'auto', padding: '20px'
+          }}>
+            <div className="glass-card animate-scale-in" style={{
+              width: '100%', maxWidth: '900px', background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-2xl)',
+              borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column',
+              maxHeight: '90vh', overflow: 'hidden', margin: 0
+            }}>
+              {/* Header */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)',
+                background: 'var(--bg-tertiary)'
+              }}>
+                <div>
+                  <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-bright)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    🧮 Mathematical Derivation Sheet: <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{p.erpCode}</span>
+                  </h3>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    Calculations for {p.description} (Active Model: {isModelB ? 'Model B: Likelihood × Impact' : 'Model A: Weighted Sum'})
+                  </div>
+                </div>
+                <button 
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCalculationDetails(false)}
+                  style={{ padding: '6px 12px', minWidth: 0, borderRadius: '50%' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '24px', flex: 1, fontFamily: "'Poppins', sans-serif" }}>
+                
+                {/* Step 1: Base Inputs */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-bright)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', margin: 0 }}>
+                    Step 1: Base System Inputs
+                  </h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', fontSize: '12px' }}>
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>In-Hand Inventory (IL):</span>
+                      <strong style={{ display: 'block', color: 'var(--text-primary)', fontSize: '14px' }}>{calc.inputs.inHandInventory} units</strong>
+                    </div>
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Days of Supply (DoS):</span>
+                      <strong style={{ display: 'block', color: 'var(--text-primary)', fontSize: '14px' }}>{calc.inputs.daysOfCoverage} days</strong>
+                    </div>
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Safety Stock (SS):</span>
+                      <strong style={{ display: 'block', color: 'var(--text-primary)', fontSize: '14px' }}>{calc.inputs.safetyStock} units</strong>
+                    </div>
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Product Category:</span>
+                      <strong style={{ display: 'block', color: 'var(--text-primary)', fontSize: '14px' }}>{calc.inputs.category}</strong>
+                    </div>
+                  </div>
+
+                  {calc.inputs.suppliers.length > 0 ? (
+                    <div style={{ marginTop: '8px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Active Suppliers:</span>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', marginTop: '4px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border-subtle)' }}>
+                        <thead>
+                          <tr style={{ background: 'var(--border-subtle)', textAlign: 'left', borderBottom: '1px solid var(--border-medium)' }}>
+                            <th style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>Supplier Name</th>
+                            <th style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>Country</th>
+                            <th style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>Supply %</th>
+                            <th style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>Lead Time (Days)</th>
+                            <th style={{ padding: '6px 10px', color: 'var(--text-secondary)' }}>Reliability (OTIF)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {calc.inputs.suppliers.map((s, idx) => (
+                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                              <td style={{ padding: '6px 10px', color: 'var(--text-primary)' }}>{s.name}</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--text-muted)' }}>{s.country} ({s.region})</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--text-primary)', fontWeight: 600 }}>{s.supplyPct}%</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--text-primary)' }}>{s.leadTimeDays} days</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--text-primary)' }}>{s.reliability}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '11.5px', fontStyle: 'italic', padding: '10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', marginTop: '4px' }}>
+                      No active suppliers configured for this SKU. Background fallback constants will be utilized.
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 2: Intermediate Variables */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-bright)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', margin: 0 }}>
+                    Step 2: Derived Supply Chain Variables
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
+                    
+                    {/* Daily Use */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Daily Consumption Rate (DailyUse)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.dailyUse.toFixed(4)} units/day</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: if (DoS &gt; 0) IL / DoS else 1
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace' }}>
+                        Calculation: {calc.inputs.daysOfCoverage > 0 ? `${calc.inputs.inHandInventory} / ${calc.inputs.daysOfCoverage}` : 'Fallback Default'} = {calc.intermediates.dailyUse.toFixed(4)}
+                      </div>
+                    </div>
+
+                    {/* Mean Lead Time */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Average Lead Time (LT_avg)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.ltAvg.toFixed(2)} days</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: {calc.intermediates.ltAvgFormula}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace' }}>
+                        Calculation: {calc.intermediates.ltAvgCalculation}
+                      </div>
+                    </div>
+
+                    {/* Sigma Lead Time */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Lead Time Volatility (Standard Deviation σ_LT)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.sigmaLT.toFixed(2)} days</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: {calc.intermediates.sigmaLTFormula} (penalized by OTIF failure rates)
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace', whiteSpace: 'pre-line' }}>
+                        Calculation: {calc.intermediates.sigmaLTCalculation}
+                      </div>
+                    </div>
+
+                    {/* Effective Lead Time */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Effective Lead Time (LT_eff)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.ltEff.toFixed(2)} days</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: LT_avg + 1.65 * σ_LT (95% service level confidence interval)
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace' }}>
+                        Calculation: {calc.intermediates.ltAvg.toFixed(2)} + 1.65 * {calc.intermediates.sigmaLT.toFixed(2)} = {calc.intermediates.ltEff.toFixed(2)} days
+                      </div>
+                    </div>
+
+                    {/* ROP */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Reorder Point (ROP)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.rop.toFixed(2)} units</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: {calc.intermediates.ropFormula}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace' }}>
+                        Calculation: {calc.intermediates.ropCalculation}
+                      </div>
+                    </div>
+
+                    {/* k ratio */}
+                    <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                        <span>Inventory Coverage Ratio (k)</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-accent)' }}>{calc.intermediates.k.toFixed(4)}</span>
+                      </div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        Formula: {calc.intermediates.kFormula}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px', fontFamily: 'monospace' }}>
+                        Calculation: {calc.intermediates.kCalculation}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Step 3: Sub-scores */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-bright)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', margin: 0 }}>
+                    Step 3: Normalized Parameter Risk Sub-scores (P1 to P8)
+                  </h4>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px' }}>
+                    {[
+                      { id: 'P1', title: 'Inventory Level (P1)', obj: calc.subScores.r1 },
+                      { id: 'P2', title: 'Days of Supply (P2)', obj: calc.subScores.r2 },
+                      { id: 'P3', title: 'Safety Stock Shortfall (P3)', obj: calc.subScores.r3 },
+                      { id: 'P4', title: 'Effective Lead Time (P4)', obj: calc.subScores.r4 },
+                      { id: 'P5', title: 'Supplier Dependence (P5)', obj: calc.subScores.r5, customRender: () => {
+                        const r5Obj = calc.subScores.r5;
+                        return (
+                          <div style={{ paddingLeft: '14px', borderLeft: '1px solid var(--border-medium)', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '11px' }}>
+                            <div>• Concentration Score (HHI): {r5Obj.parts.rConcFormula} &rarr; {r5Obj.parts.rConcCalculation}</div>
+                            <div>• Average OTIF Score: {r5Obj.parts.rOtifFormula} &rarr; {r5Obj.parts.rOtifCalculation} (Avg OTIF: {r5Obj.parts.otifAvgCalculation})</div>
+                            <div style={{ fontWeight: 600 }}>• Combined (0.5 * HHI + 0.5 * OTIF): {r5Obj.calculation}</div>
+                          </div>
+                        );
+                      }},
+                      { id: 'P6', title: 'Inventory Criticality (P6)', obj: calc.subScores.r6 },
+                      { id: 'P7', title: 'Tariff Changes (P7)', obj: calc.subScores.r7 },
+                      { id: 'P8', title: 'Corridor Threats (P8)', obj: calc.subScores.r8 },
+                    ].map(param => (
+                      <div key={param.id} style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', borderLeft: `3px solid ${param.obj.score > 0.75 ? 'var(--danger)' : param.obj.score > 0.4 ? 'var(--warning)' : 'var(--success)'}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          <span>{param.title}</span>
+                          <span style={{ color: param.obj.score > 0.75 ? 'var(--danger)' : param.obj.score > 0.4 ? 'var(--warning)' : 'var(--success)', fontWeight: 700 }}>
+                            {param.obj.score.toFixed(2)}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '2px' }}>
+                          Formula: {param.obj.formula}
+                        </div>
+                        {!param.customRender && (
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: '2px' }}>
+                            Calculation: {param.obj.calculation}
+                          </div>
+                        )}
+                        {param.customRender && param.customRender()}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step 4: Model Aggregation */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-bright)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', margin: 0 }}>
+                    Step 4: Active Model Aggregation ({isModelB ? 'Model B: Likelihood × Impact' : 'Model A: Weighted Sum'})
+                  </h4>
+
+                  {isModelB ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px' }}>
+                      
+                      {/* Likelihood Table */}
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '8px' }}>
+                          Part 4a: Likelihood Index Calculation (Weighted Sum of Operational Parameters)
+                        </span>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-medium)', textAlign: 'left' }}>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Parameter Name</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Subscore (S)</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Weight (W)</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Contribution (S × W)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {calc.modelB.parts.map((part, idx) => (
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-primary)' }}>{part.name}</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-primary)', fontFamily: 'monospace' }}>{part.score.toFixed(2)}</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{(part.weight * 100).toFixed(1)}%</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-accent)', fontWeight: 600, fontFamily: 'monospace' }}>{(part.score * part.weight).toFixed(4)}</td>
+                              </tr>
+                            ))}
+                            <tr style={{ background: 'var(--border-subtle)', fontWeight: 700 }}>
+                              <td colSpan={3} style={{ padding: '6px', color: 'var(--text-primary)' }}>Weighted Likelihood (L)</td>
+                              <td style={{ padding: '6px', color: 'var(--text-accent)', fontFamily: 'monospace' }}>{calc.modelB.likelihood.toFixed(4)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Impact Calculation */}
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>
+                          Part 4b: Impact Multiplier Calculation
+                        </span>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                          Formula: Impact (I) = 0.40 + 0.60 * CriticalityScore (P6)
+                        </div>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-primary)', marginTop: '4px' }}>
+                          Calculation: 0.40 + 0.60 * {calc.subScores.r6.score.toFixed(2)} = {calc.modelB.impact.toFixed(3)}
+                        </div>
+                      </div>
+
+                      {/* Aggregate Risk Score */}
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>
+                          Part 4c: Initial Risk Score Synthesis
+                        </span>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                          Formula: InitialScore = 100 * Likelihood * Impact
+                        </div>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-primary)', marginTop: '4px' }}>
+                          Calculation: 100 * {calc.modelB.likelihood.toFixed(4)} * {calc.modelB.impact.toFixed(3)} = {calc.modelB.score.toFixed(4)}
+                        </div>
+                      </div>
+
+                      {/* Floor overrides */}
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: calc.modelB.hasOverride ? '1px solid var(--danger-border)' : '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: calc.modelB.hasOverride ? 'var(--danger)' : 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>
+                          Part 4d: Non-Compensatory Floor Overrides Check
+                        </span>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                          If any critical threat (Days of Supply P2, Tariffs P7, or Corridor Threats P8) is extreme (sub-score &ge; 0.90), the final risk score has a floor cap backstop of 70.0 to prevent safe metrics from masking severe single-point failures.
+                        </div>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                          Max of P2 ({calc.subScores.r2.score.toFixed(2)}), P7 ({calc.subScores.r7.score.toFixed(2)}), P8 ({calc.subScores.r8.score.toFixed(2)}) = {calc.modelB.maxOverrideVal.toFixed(2)}
+                        </div>
+                        <div style={{ fontWeight: 600, color: calc.modelB.hasOverride ? 'var(--danger)' : 'var(--success)', marginTop: '6px' }}>
+                          {calc.modelB.hasOverride 
+                            ? `⚠️ Extreme parameter found (>= 0.90)! Final Score = max(${calc.modelB.score.toFixed(1)}, 70.0) = ${calc.modelB.scoreFinal.toFixed(1)}`
+                            : `✓ No parameters exceed the 0.90 override trigger. Final Score = ${calc.modelB.scoreFinal.toFixed(1)}`
+                          }
+                        </div>
+                      </div>
+
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px' }}>
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '8px' }}>
+                          Weighted Sum Aggregation Table
+                        </span>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-medium)', textAlign: 'left' }}>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Parameter Name</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Subscore (S)</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Weight (W)</th>
+                              <th style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>Contribution (S × W)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {calc.modelA.parts.map((part, idx) => (
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-primary)' }}>{part.name}</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-primary)', fontFamily: 'monospace' }}>{part.score.toFixed(2)}</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{(part.weight * 100).toFixed(1)}%</td>
+                                <td style={{ padding: '5px 6px', color: 'var(--text-accent)', fontWeight: 600, fontFamily: 'monospace' }}>{(part.score * part.weight).toFixed(4)}</td>
+                              </tr>
+                            ))}
+                            <tr style={{ background: 'var(--border-subtle)', fontWeight: 700 }}>
+                              <td colSpan={3} style={{ padding: '6px', color: 'var(--text-primary)' }}>Weighted Sum Product</td>
+                              <td style={{ padding: '6px', color: 'var(--text-accent)', fontFamily: 'monospace' }}>{calc.modelA.sumProd.toFixed(4)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>
+                          Initial Score Scaling
+                        </span>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                          Formula: FinalScore = 100 * WeightedSumProduct
+                        </div>
+                        <div style={{ fontFamily: 'monospace', color: 'var(--text-primary)', marginTop: '4px' }}>
+                          Calculation: 100 * {calc.modelA.sumProd.toFixed(4)} = {calc.modelA.score.toFixed(1)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 5: Output Verdict */}
+                <div style={{
+                  background: 'var(--accent-gradient-subtle)',
+                  border: '1px solid var(--tm-red)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginTop: '10px'
+                }}>
+                  <div>
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>
+                      Calculated Risk Score Output
+                    </span>
+                    <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
+                      Model: <strong>{isModelB ? 'Model B (Likelihood × Impact)' : 'Model A (Weighted Sum)'}</strong>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '28px', fontWeight: 900, color: activeScore > 75 ? 'var(--danger)' : activeScore > 50 ? 'var(--warning)' : 'var(--success)', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end', lineHeight: 1.1 }}>
+                      {activeScore.toFixed(1)}
+                      <span className={`badge ${activeScore > 75 ? 'critical' : activeScore > 50 ? 'warning' : activeScore > 25 ? 'neutral' : 'success'}`} style={{ fontSize: '11px', padding: '3px 8px' }}>
+                        {activeScore > 75 ? 'Critical' : activeScore > 50 ? 'High' : activeScore > 25 ? 'Moderate' : 'Low'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div style={{
+                display: 'flex', justifyContent: 'flex-end',
+                padding: '14px 20px', borderTop: '1px solid var(--border-subtle)',
+                background: 'var(--bg-tertiary)'
+              }}>
+                <button 
+                  className="btn btn-primary"
+                  onClick={() => setShowCalculationDetails(false)}
+                >
+                  Close Details
                 </button>
               </div>
             </div>

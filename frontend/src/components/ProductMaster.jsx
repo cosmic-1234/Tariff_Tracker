@@ -4,7 +4,7 @@ import { productMaster, getInventoryCriticality } from '../data/productMaster.js
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
-export default function ProductMaster({ onNavigate, currency, convertAmount }) {
+export default function ProductMaster({ onNavigate, setSelectedProductForCalc, currency, convertAmount }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState('erpCode');
   const [sortDir, setSortDir] = useState('asc');
@@ -149,7 +149,10 @@ export default function ProductMaster({ onNavigate, currency, convertAmount }) {
                 const criticality = getInventoryCriticality(p.daysOfCoverage);
                 const suppliers = getSuppliersForProduct(p.erpCode);
                 return (
-                  <tr key={p.erpCode} className="clickable" onClick={() => onNavigate('calculator')}>
+                  <tr key={p.erpCode} className="clickable" onClick={() => {
+                    setSelectedProductForCalc(p);
+                    onNavigate('calculator');
+                  }}>
                     <td style={{ fontWeight: 600, fontFamily: 'monospace' }}>{p.erpCode}</td>
                     <td style={{ fontFamily: 'monospace' }}>{p.hsCode}</td>
                     <td><span className="badge neutral">{p.category}</span></td>

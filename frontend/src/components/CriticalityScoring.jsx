@@ -621,6 +621,8 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     return [];
   }, [scoredComponents, treemapGroup, matrixSizingMode, convertAmount, currency, bandsConfig]);
 
+
+
   const handleTreemapClick = (node) => {
     if (!node) return;
     
@@ -1218,28 +1220,20 @@ export default function CriticalityScoring({ currency, convertAmount }) {
             </div>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative' }}>
-            <div 
-              style={{ 
-                  position: 'relative', 
-                  width: '100%', 
-                  height: '380px', 
-                  flex: 1, 
-                  minHeight: '380px'
-                }}
-              >
-                <div
-                  ref={containerRef}
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    overflow: 'hidden',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--bg-tertiary)',
-                    border: '1px solid var(--border-subtle)',
-                    position: 'relative'
-                  }}
-                >
+          {/* Visual Container (Proportional Packed HTML Treemap) */}
+          <div style={{ position: 'relative', flexShrink: 0, marginTop: '4px' }}>
+            <div
+              ref={containerRef}
+              style={{
+                width: '100%',
+                height: '380px',
+                overflow: 'hidden',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                position: 'relative'
+              }}
+            >
                   {(() => {
                     const leafNodes = [];
                     treemapData.forEach(parent => {
@@ -1260,106 +1254,110 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                       dimensions.height
                     );
 
-                    return layoutCards.map((card, idx) => {
-                      return (
-                        <div
-                          key={card.erpCode || card.name || idx}
-                          onClick={() => handleTreemapClick(card)}
-                          onMouseEnter={() => setHoveredCard(card)}
-                          onMouseMove={(e) => {
-                            const rect = e.currentTarget.parentElement.getBoundingClientRect();
-                            setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-                          }}
-                          onMouseLeave={() => setHoveredCard(null)}
-                          style={{
-                            position: 'absolute',
-                            left: `${card.x}px`,
-                            top: `${card.y}px`,
-                            width: `${card.w}px`,
-                            height: `${card.h}px`,
-                            padding: '6px',
-                            boxSizing: 'border-box',
-                            background: getScoreColor(card.score || 1),
-                            color: '#ffffff',
-                            border: document.documentElement.classList.contains('light-theme') ? '2px solid #ffffff' : '2px solid var(--bg-secondary)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'center',
-                            alignItems: 'center',
-                            cursor: 'pointer',
-                            overflow: 'hidden',
-                            transition: 'transform 0.15s ease-out, filter 0.15s ease-out',
-                            textShadow: '0 1px 2px rgba(0, 0, 0, 0.4)',
-                            textAlign: 'center',
-                            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-                            letterSpacing: '-0.01em'
-                          }}
-                          className="treemap-rect"
-                        >
-                          {/* Name */}
-                          <div
-                            style={{
-                              fontWeight: 500,
-                              fontSize: card.w > 120 ? '13px' : card.w > 80 ? '11px' : '9.5px',
-                              lineHeight: 1.25,
-                              textAlign: 'center',
-                              width: '100%',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              display: '-webkit-box',
-                              WebkitLineClamp: card.h > 60 ? 3 : 2,
-                              WebkitBoxOrient: 'vertical',
-                              marginBottom: '3px',
-                              pointerEvents: 'none',
-                              letterSpacing: '0.01em'
-                            }}
-                          >
-                            {card.name}
-                          </div>
-                          
-                          {/* Value */}
-                          {card.h > 45 && (
+                    return (
+                      <>
+                        {layoutCards.map((card, idx) => {
+                          return (
                             <div
+                              key={card.erpCode || card.name || idx}
+                              onClick={() => handleTreemapClick(card)}
+                              onMouseEnter={() => setHoveredCard(card)}
+                              onMouseMove={(e) => {
+                                const rect = e.currentTarget.parentElement.getBoundingClientRect();
+                                setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                              }}
+                              onMouseLeave={() => setHoveredCard(null)}
                               style={{
-                                fontWeight: 400,
-                                fontSize: card.w > 120 ? '12px' : card.w > 80 ? '10.5px' : '9px',
-                                opacity: 0.9,
+                                position: 'absolute',
+                                left: `${card.x}px`,
+                                top: `${card.y}px`,
+                                width: `${card.w}px`,
+                                height: `${card.h}px`,
+                                padding: '6px',
+                                boxSizing: 'border-box',
+                                background: getScoreColor(card.score || 1),
+                                color: '#ffffff',
+                                border: document.documentElement.classList.contains('light-theme') ? '2px solid #ffffff' : '2px solid var(--bg-secondary)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                cursor: 'pointer',
+                                overflow: 'hidden',
+                                transition: 'transform 0.15s ease-out, filter 0.15s ease-out',
+                                textShadow: '0 1px 2px rgba(0, 0, 0, 0.4)',
                                 textAlign: 'center',
-                                pointerEvents: 'none',
-                                letterSpacing: '0'
+                                fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+                                letterSpacing: '-0.01em'
                               }}
+                              className="treemap-rect"
                             >
-                              {card.formattedValue}
+                              {/* Name */}
+                              <div
+                                style={{
+                                  fontWeight: 500,
+                                  fontSize: card.w > 120 ? '13px' : card.w > 80 ? '11px' : '9.5px',
+                                  lineHeight: 1.25,
+                                  textAlign: 'center',
+                                  width: '100%',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: card.h > 60 ? 3 : 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  marginBottom: '3px',
+                                  pointerEvents: 'none',
+                                  letterSpacing: '0.01em'
+                                }}
+                              >
+                                {card.name}
+                              </div>
+                              
+                              {/* Value */}
+                              {card.h > 45 && (
+                                <div
+                                  style={{
+                                    fontWeight: 400,
+                                    fontSize: card.w > 120 ? '12px' : card.w > 80 ? '10.5px' : '9px',
+                                    opacity: 0.9,
+                                    textAlign: 'center',
+                                    pointerEvents: 'none',
+                                    letterSpacing: '0'
+                                  }}
+                                >
+                                  {card.formattedValue}
+                                </div>
+                              )}
+    
+                              {/* Info Badge */}
+                              {card.w > 95 && card.h > 70 && (
+                                <div
+                                  style={{
+                                    fontSize: '8px',
+                                    fontWeight: 500,
+                                    marginTop: '6px',
+                                    background: 'rgba(0, 0, 0, 0.2)',
+                                    padding: '2px 6px',
+                                    borderRadius: '3px',
+                                    letterSpacing: '0.8px',
+                                    textTransform: 'uppercase',
+                                    pointerEvents: 'none',
+                                    border: '1px solid rgba(255, 255, 255, 0.12)'
+                                  }}
+                                >
+                                  {card.erpCode || `${card.band} Band`}
+                                </div>
+                              )}
                             </div>
-                          )}
-
-                          {/* Info Badge */}
-                          {card.w > 95 && card.h > 70 && (
-                            <div
-                              style={{
-                                fontSize: '8px',
-                                fontWeight: 500,
-                                marginTop: '6px',
-                                background: 'rgba(0, 0, 0, 0.2)',
-                                padding: '2px 6px',
-                                borderRadius: '3px',
-                                letterSpacing: '0.8px',
-                                textTransform: 'uppercase',
-                                pointerEvents: 'none',
-                                border: '1px solid rgba(255, 255, 255, 0.12)'
-                              }}
-                            >
-                              {card.erpCode || `${card.band} Band`}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    });
+                          );
+                        })}
+                      </>
+                    );
                   })()}
-                </div>
+            </div>
 
-                {/* Cursor-Following Glassmorphic Tooltip */}
-                {hoveredCard && (
+            {/* Cursor-Following Glassmorphic Tooltip */}
+            {hoveredCard && (
                   <div 
                     className="glass-card animate-scale-in" 
                     style={{ 
@@ -1434,41 +1432,8 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                     </div>
                   </div>
                 )}
-              </div>
           </div>
 
-          {/* Bottom Scale/Gradient Legend (Styled to match InventoryClassification EXACTLY) */}
-          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px', padding: '12px 16px 8px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>SDE * VED Sourcing Risk Scale (Gradient Legend)</span>
-              <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Proportional Size By {matrixSizingMode === 'value' ? 'Value' : matrixSizingMode === 'count' ? 'Count' : matrixSizingMode === 'score' ? 'Score' : 'Equal'}</span>
-            </div>
-            <div style={{ position: 'relative', height: '14px', borderRadius: '4px', background: 'linear-gradient(90deg, #a82b2b 0%, #dbaf58 50%, #3f6212 100%)', border: '1px solid var(--border-medium)' }}>
-              {/* Visual scale ticks */}
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '20%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '40%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '60%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '80%', width: '1px', background: 'rgba(255,255,255,0.15)' }}></div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 2px 0', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, fontFamily: 'monospace' }}>
-              <div style={{ textAlign: 'left' }}>
-                <span style={{ color: 'var(--danger)', fontSize: '11px', fontWeight: 750 }}>25.0</span>
-                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--danger)', marginTop: '2px' }}>CRITICAL RISK</div>
-              </div>
-              <div style={{ textAlign: 'center', transform: 'translateX(-10px)' }}>
-                <span>15.0</span>
-                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>HIGH</div>
-              </div>
-              <div style={{ textAlign: 'center', transform: 'translateX(10px)' }}>
-                <span>6.0</span>
-                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>MEDIUM</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <span style={{ color: 'var(--success)', fontSize: '11px', fontWeight: 750 }}>1.0</span>
-                <div style={{ fontSize: '8.5px', fontWeight: 500, color: 'var(--success)', marginTop: '2px' }}>LOW RISK</div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Right Side: Manual input form and CSV bulk upload */}

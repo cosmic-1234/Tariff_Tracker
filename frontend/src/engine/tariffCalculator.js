@@ -189,20 +189,45 @@ function generateNotifications(product, supplier, tariffPct, fob, totalLandedCos
 /**
  * Compare two suppliers side by side
  */
-export function compareSuppliers(result1, result2) {
-  if (!result1 || !result2) return null;
+export function compareSuppliers(resultsOrResult1, result2) {
+  let results = [];
+  if (Array.isArray(resultsOrResult1)) {
+    results = resultsOrResult1;
+  } else {
+    if (!resultsOrResult1 || !result2) return null;
+    results = [resultsOrResult1, result2];
+  }
 
-  const costDiff = result1.landedCostPerUnit - result2.landedCostPerUnit;
-  const leadTimeDiff = result1.leadTimeDays - result2.leadTimeDays;
-  const tariffDiff = result1.tariffPct - result2.tariffPct;
+  if (results.length < 2) return null;
+
+  // Find cheapest supplier
+  const sortedByCost = [...results].sort((a, b) => a.landedCostPerUnit - b.landedCostPerUnit);
+  const bestCost = sortedByCost[0];
+  const secondBestCost = sortedByCost[1];
+  const costDiff = secondBestCost.landedCostPerUnit - bestCost.landedCostPerUnit;
+  const costDifferencePct = secondBestCost.landedCostPerUnit > 0
+    ? ((costDiff / secondBestCost.landedCostPerUnit) * 100).toFixed(1)
+    : 0;
+
+  // Find fastest supplier
+  const sortedByTime = [...results].sort((a, b) => a.leadTimeDays - b.leadTimeDays);
+  const bestTime = sortedByTime[0];
+  const secondBestTime = sortedByTime[1];
+  const leadTimeDiff = secondBestTime.leadTimeDays - bestTime.leadTimeDays;
+
+  // Find lowest tariff supplier
+  const sortedByTariff = [...results].sort((a, b) => a.tariffPct - b.tariffPct);
+  const bestTariff = sortedByTariff[0];
+  const secondBestTariff = sortedByTariff[1];
+  const tariffDiff = secondBestTariff.tariffPct - bestTariff.tariffPct;
 
   return {
-    cheaperSupplier: costDiff <= 0 ? result1.supplierName : result2.supplierName,
-    costDifference: Math.abs(costDiff),
-    costDifferencePct: result2.landedCostPerUnit > 0 ? ((costDiff / result2.landedCostPerUnit) * 100).toFixed(1) : 0,
-    fasterSupplier: leadTimeDiff <= 0 ? result1.supplierName : result2.supplierName,
-    leadTimeDifference: Math.abs(leadTimeDiff),
-    lowerTariffSupplier: tariffDiff <= 0 ? result1.supplierName : result2.supplierName,
-    tariffDifference: Math.abs(tariffDiff),
+    cheaperSupplier: bestCost.supplierName,
+    costDifference: costDiff,
+    costDifferencePct: parseFloat(costDifferencePct),
+    fasterSupplier: bestTime.supplierName,
+    leadTimeDifference: leadTimeDiff,
+    lowerTariffSupplier: bestTariff.supplierName,
+    tariffDifference: tariffDiff,
   };
 }

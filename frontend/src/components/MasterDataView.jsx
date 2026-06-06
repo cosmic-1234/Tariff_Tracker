@@ -1,10 +1,26 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Globe, Ship, Plane, MapPin, DollarSign } from 'lucide-react';
-import { countries, regions, majorCorridors, insuranceCostMatrix, shippingCostMatrix, tariffRateTable } from '../data/masterData.js';
+import { countries, regions, majorCorridors, insuranceCostMatrix, shippingCostMatrix, tariffRateTable, getCountryByCode } from '../data/masterData.js';
 import { supplierMaster, getAllSuppliers } from '../data/supplierMaster.js';
 
 export default function MasterDataView() {
   const [activeTab, setActiveTab] = useState('countries');
+  const [selectedDestCountry, setSelectedDestCountry] = useState('India');
+
+  const tariffsHsRates = tariffRateTable[selectedDestCountry] || {};
+  const tariffsSourceCountryCodes = useMemo(() => {
+    const codes = [];
+    const seen = new Set();
+    Object.values(tariffsHsRates).forEach(rates => {
+      Object.keys(rates).forEach(k => {
+        if (k !== 'default' && !seen.has(k)) {
+          seen.add(k);
+          codes.push(k);
+        }
+      });
+    });
+    return codes;
+  }, [tariffsHsRates]);
 
   const tabs = [
     { id: 'countries', label: 'Countries & Corridors', icon: Globe },
@@ -16,13 +32,13 @@ export default function MasterDataView() {
 
   return (
     <div className="animate-fade-in">
-      <div className="tabs">
+      <div className="tab-group">
         {tabs.map(tab => {
           const Icon = tab.icon;
           return (
             <button
               key={tab.id}
-              className={`tab ${activeTab === tab.id ? 'active' : ''}`}
+              className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -101,32 +117,37 @@ export default function MasterDataView() {
 
       {/* ── Insurance Cost Matrix ── */}
       {activeTab === 'insurance' && (
-        <div className="grid-2">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           {['Ship/Ocean', 'Air'].map(mode => (
-            <div key={mode} className="glass-card">
+            <div key={mode} className="glass-card" style={{ width: '100%' }}>
               <div className="card-title">
                 {mode === 'Ship/Ocean' ? <Ship size={18} className="icon" /> : <Plane size={18} className="icon" />}
                 Average Insurance Cost Matrix — {mode}
                 <span className="badge neutral" style={{ marginLeft: 'auto' }}>% of FOB</span>
               </div>
-              <div className="data-table-container">
-                <table className="matrix-table">
+              <div className="data-table-container" style={{ border: '1px solid var(--border-medium)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
+                <table className="matrix-table" style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid var(--border-medium)' }}>
                   <thead>
                     <tr>
-                      <th>From \ To</th>
-                      {regions.map(r => <th key={r}>{r}</th>)}
+                      <th style={{ border: '1px solid var(--border-subtle)', padding: '14px 18px', background: 'var(--bg-tertiary)', textTransform: 'uppercase', fontSize: '12px', color: 'var(--text-secondary)' }}>From \ To</th>
+                      {regions.map(r => (
+                        <th key={r} style={{ border: '1px solid var(--border-subtle)', padding: '14px 18px', background: 'var(--bg-tertiary)', textTransform: 'uppercase', fontSize: '12px', color: 'var(--text-secondary)' }}>{r}</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {regions.map(fromRegion => (
-                      <tr key={fromRegion}>
-                        <td style={{ fontWeight: 600, textAlign: 'left', background: 'var(--bg-tertiary)' }}>{fromRegion}</td>
+                      <tr key={fromRegion} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ fontWeight: 600, textAlign: 'left', background: 'var(--bg-tertiary)', padding: '14px 18px', border: '1px solid var(--border-subtle)', borderRight: '2px solid var(--border-medium)' }}>{fromRegion}</td>
                         {regions.map(toRegion => {
                           const val = insuranceCostMatrix[mode]?.[fromRegion]?.[toRegion];
                           const isDiag = fromRegion === toRegion;
                           return (
                             <td key={toRegion} className={isDiag ? 'diagonal' : ''} style={{
                               fontWeight: 600,
+                              textAlign: 'center',
+                              padding: '14px 18px',
+                              border: '1px solid var(--border-subtle)',
                               color: val > 1 ? 'var(--warning)' : val > 0.5 ? 'var(--text-primary)' : 'var(--success)',
                             }}>
                               {val !== undefined ? `${val}%` : '—'}
@@ -145,32 +166,37 @@ export default function MasterDataView() {
 
       {/* ── Shipping Cost Matrix ── */}
       {activeTab === 'shipping' && (
-        <div className="grid-2">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           {['Ship/Ocean', 'Air'].map(mode => (
-            <div key={mode} className="glass-card">
+            <div key={mode} className="glass-card" style={{ width: '100%' }}>
               <div className="card-title">
                 {mode === 'Ship/Ocean' ? <Ship size={18} className="icon" /> : <Plane size={18} className="icon" />}
                 Average Shipping Cost Matrix — {mode}
                 <span className="badge neutral" style={{ marginLeft: 'auto' }}>% of FOB</span>
               </div>
-              <div className="data-table-container">
-                <table className="matrix-table">
+              <div className="data-table-container" style={{ border: '1px solid var(--border-medium)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
+                <table className="matrix-table" style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid var(--border-medium)' }}>
                   <thead>
                     <tr>
-                      <th>From \ To</th>
-                      {regions.map(r => <th key={r}>{r}</th>)}
+                      <th style={{ border: '1px solid var(--border-subtle)', padding: '14px 18px', background: 'var(--bg-tertiary)', textTransform: 'uppercase', fontSize: '12px', color: 'var(--text-secondary)' }}>From \ To</th>
+                      {regions.map(r => (
+                        <th key={r} style={{ border: '1px solid var(--border-subtle)', padding: '14px 18px', background: 'var(--bg-tertiary)', textTransform: 'uppercase', fontSize: '12px', color: 'var(--text-secondary)' }}>{r}</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {regions.map(fromRegion => (
-                      <tr key={fromRegion}>
-                        <td style={{ fontWeight: 600, textAlign: 'left', background: 'var(--bg-tertiary)' }}>{fromRegion}</td>
+                      <tr key={fromRegion} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ fontWeight: 600, textAlign: 'left', background: 'var(--bg-tertiary)', padding: '14px 18px', border: '1px solid var(--border-subtle)', borderRight: '2px solid var(--border-medium)' }}>{fromRegion}</td>
                         {regions.map(toRegion => {
                           const val = shippingCostMatrix[mode]?.[fromRegion]?.[toRegion];
                           const isDiag = fromRegion === toRegion;
                           return (
                             <td key={toRegion} className={isDiag ? 'diagonal' : ''} style={{
                               fontWeight: 600,
+                              textAlign: 'center',
+                              padding: '14px 18px',
+                              border: '1px solid var(--border-subtle)',
                               color: val > 8 ? 'var(--danger)' : val > 4 ? 'var(--warning)' : 'var(--success)',
                             }}>
                               {val !== undefined ? `${val}%` : '—'}
@@ -189,49 +215,62 @@ export default function MasterDataView() {
 
       {/* ── Tariff Rates ── */}
       {activeTab === 'tariffs' && (
-        <div className="glass-card">
-          <div className="card-title">
+        <div className="glass-card animate-fade-in">
+          <div className="card-title" style={{ marginBottom: '20px' }}>
             <DollarSign size={18} className="icon" />
-            Tariff Rate Table — India Import Duties
+            Tariff Rate Matrix by Destination
             <span className="badge info" style={{ marginLeft: 'auto' }}>% of FOB · Based on HS Code prefix</span>
           </div>
-          {Object.entries(tariffRateTable).map(([destCountry, hsRates]) => (
-            <div key={destCountry} style={{ marginBottom: '24px' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '12px' }}>
-                Destination: {destCountry}
-              </h3>
-              <div className="data-table-container">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>HS Prefix</th>
-                      <th>Default</th>
-                      <th>USA (US)</th>
-                      <th>China (CN)</th>
-                      <th>Germany (DE)</th>
-                      <th>Netherlands (NL)</th>
-                      <th>Japan (JP)</th>
-                      <th>S. Korea (KR)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(hsRates).map(([prefix, rates]) => (
-                      <tr key={prefix}>
-                        <td style={{ fontWeight: 700, fontFamily: 'monospace' }}>{prefix}</td>
-                        <td>{rates.default !== undefined ? `${rates.default}%` : '—'}</td>
-                        <td>{rates.US !== undefined ? `${rates.US}%` : '—'}</td>
-                        <td>{rates.CN !== undefined ? `${rates.CN}%` : '—'}</td>
-                        <td>{rates.DE !== undefined ? `${rates.DE}%` : '—'}</td>
-                        <td>{rates.NL !== undefined ? `${rates.NL}%` : '—'}</td>
-                        <td>{rates.JP !== undefined ? `${rates.JP}%` : '—'}</td>
-                        <td>{rates.KR !== undefined ? `${rates.KR}%` : '—'}</td>
-                      </tr>
+
+          {/* Destination Country Dropdown */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Destination Country:</span>
+            <select
+              className="form-select"
+              style={{ width: '220px', margin: 0, padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-medium)', borderRadius: 'var(--radius-md)', color: 'var(--text-bright)' }}
+              value={selectedDestCountry}
+              onChange={e => setSelectedDestCountry(e.target.value)}
+            >
+              {Object.keys(tariffRateTable).map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '8px' }}>
+              Import Duties for Destination: <span style={{ color: 'var(--tm-red)' }}>{selectedDestCountry}</span>
+            </h3>
+          </div>
+
+          <div className="data-table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>HS Prefix</th>
+                  {tariffsSourceCountryCodes.map(code => {
+                    const c = getCountryByCode(code);
+                    return <th key={code}>{c ? `${c.name} (${code})` : code}</th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(tariffsHsRates).map(([prefix, rates]) => (
+                  <tr key={prefix}>
+                    <td style={{ fontWeight: 700, fontFamily: 'monospace' }}>{prefix}</td>
+                    {tariffsSourceCountryCodes.map(code => (
+                      <td key={code}>
+                        {rates[code] !== undefined ? `${rates[code]}%` : '—'}
+                      </td>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            Tariff rates classified as per destination customs regulations. DEFAULT values omitted from grid representation.
+          </div>
         </div>
       )}
 
