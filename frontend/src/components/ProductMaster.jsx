@@ -140,6 +140,9 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
                 <th>ROQ</th>
                 <th>Review</th>
                 <th>Safety Stock</th>
+                <th onClick={() => handleSort('holdingCostPct')} className={sortField === 'holdingCostPct' ? 'sorted' : ''}>
+                  Holding Cost {renderSortIcon('holdingCostPct')}
+                </th>
                 <th>Inventory Level</th>
                 <th>Suppliers</th>
               </tr>
@@ -169,6 +172,9 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
                     <td>{p.roq}</td>
                     <td><span className="badge info">{p.reviewType}</span></td>
                     <td>{p.safetyStock}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--warning)', fontFamily: 'monospace' }}>
+                      {p.holdingCostPct ? `${(p.holdingCostPct * 365 * 100).toFixed(1)}%` : '15.0%'}
+                    </td>
                     <td>
                       <span className={`badge ${criticality === 'Critical' ? 'critical' : criticality === 'Medium' ? 'warning' : 'success'}`}>
                         {criticality}

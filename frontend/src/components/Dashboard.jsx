@@ -178,13 +178,13 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
         </div>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <button className="btn btn-primary" onClick={() => onNavigate('calculator')}>
-            <Calculator size={16} /> Open Tariff Calculator
+            <Calculator size={16} /> Open Tariff Impact Calculator
           </button>
           <button className="btn btn-secondary" onClick={() => onNavigate('products')}>
             <Package size={16} /> View Product Master
           </button>
           <button className="btn btn-secondary" onClick={() => onNavigate('masterdata')}>
-            <Globe size={16} /> View Master Data & Matrices
+            <Globe size={16} /> View Supplier Master & Matrices
           </button>
         </div>
       </div>

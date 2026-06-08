@@ -2,11 +2,11 @@ import { LayoutDashboard, Calculator, Package, Database, ChevronLeft, ChevronRig
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Overview' },
-  { id: 'calculator', label: 'Tariff Calculator', icon: Calculator, section: 'Tools' },
-  { id: 'scoring', label: 'Criticality Scoring', icon: ShieldAlert, section: 'Tools' },
-  { id: 'riskengine', label: 'Risk Engine', icon: Activity, section: 'Tools' },
+  { id: 'calculator', label: 'Tariff Impact Calculator', icon: Calculator, section: 'Tools' },
+  { id: 'scoring', label: 'Inventory Analysis', icon: ShieldAlert, section: 'Tools' },
+  { id: 'riskengine', label: 'Risk Factor Analysis', icon: Activity, section: 'Tools' },
   { id: 'products', label: 'Product Master', icon: Package, section: 'Data' },
-  { id: 'masterdata', label: 'Master Data', icon: Database, section: 'Data' },
+  { id: 'masterdata', label: 'Supplier Master', icon: Database, section: 'Data' },
 ];
 
 export default function Sidebar({ currentPage, onNavigate, collapsed, onToggleCollapse }) {

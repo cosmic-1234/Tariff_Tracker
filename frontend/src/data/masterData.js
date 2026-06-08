@@ -1,5 +1,5 @@
 // Master Data — Countries, Corridors, Cost Matrices, Tariff Rates
-// This data drives all auto-calculations in the Tariff Calculator
+// This data drives all auto-calculations in the Tariff Impact Calculator
 
 // ─────────────────────────────────────────────
 // Country & Region Data

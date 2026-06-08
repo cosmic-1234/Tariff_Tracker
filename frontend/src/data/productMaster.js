@@ -1,6 +1,6 @@
 // Product Master Data — generated dynamically from excel Product Master Prototype
 // Fields: erpCode, hsCode, category, description, inHandInventory, inventoryValue,
-//         inTransitInventory, daysOfCoverage, roq, reviewType, safetyStock
+//         inTransitInventory, daysOfCoverage, roq, reviewType, safetyStock, holdingCostPct
 
 export const productMaster = [
   {
@@ -14,7 +14,8 @@ export const productMaster = [
     "daysOfCoverage": 45,
     "roq": 4,
     "reviewType": "Perpetual",
-    "safetyStock": 3
+    "safetyStock": 3,
+    "holdingCostPct": 0.0008
   },
   {
     "erpCode": "PRD0002",
@@ -27,7 +28,8 @@ export const productMaster = [
     "daysOfCoverage": 60,
     "roq": 50,
     "reviewType": "Perpetual",
-    "safetyStock": 20
+    "safetyStock": 20,
+    "holdingCostPct": 0.0011
   },
   {
     "erpCode": "PRD0003",
@@ -40,7 +42,8 @@ export const productMaster = [
     "daysOfCoverage": 30,
     "roq": 10,
     "reviewType": "Perpetual",
-    "safetyStock": 5
+    "safetyStock": 5,
+    "holdingCostPct": 0.0006
   },
   {
     "erpCode": "PRD0004",
@@ -53,7 +56,8 @@ export const productMaster = [
     "daysOfCoverage": 25,
     "roq": 2,
     "reviewType": "Perpetual",
-    "safetyStock": 1
+    "safetyStock": 1,
+    "holdingCostPct": 0.0014
   },
   {
     "erpCode": "PRD0005",
@@ -66,7 +70,8 @@ export const productMaster = [
     "daysOfCoverage": 20,
     "roq": 1,
     "reviewType": "Perpetual",
-    "safetyStock": 1
+    "safetyStock": 1,
+    "holdingCostPct": 0.0009
   },
   {
     "erpCode": "PRD0006",
@@ -79,7 +84,8 @@ export const productMaster = [
     "daysOfCoverage": 80,
     "roq": 200,
     "reviewType": "Periodic",
-    "safetyStock": 100
+    "safetyStock": 100,
+    "holdingCostPct": 0.0012
   },
   {
     "erpCode": "PRD0007",
@@ -92,7 +98,8 @@ export const productMaster = [
     "daysOfCoverage": 35,
     "roq": 5,
     "reviewType": "Perpetual",
-    "safetyStock": 3
+    "safetyStock": 3,
+    "holdingCostPct": 0.0007
   },
   {
     "erpCode": "PRD0008",
@@ -105,7 +112,8 @@ export const productMaster = [
     "daysOfCoverage": 40,
     "roq": 5,
     "reviewType": "Perpetual",
-    "safetyStock": 2
+    "safetyStock": 2,
+    "holdingCostPct": 0.001
   },
   {
     "erpCode": "PRD0009",
@@ -118,7 +126,8 @@ export const productMaster = [
     "daysOfCoverage": 90,
     "roq": 120,
     "reviewType": "Periodic",
-    "safetyStock": 60
+    "safetyStock": 60,
+    "holdingCostPct": 0.0005
   },
   {
     "erpCode": "PRD0010",
@@ -131,7 +140,8 @@ export const productMaster = [
     "daysOfCoverage": 75,
     "roq": 250,
     "reviewType": "Periodic",
-    "safetyStock": 100
+    "safetyStock": 100,
+    "holdingCostPct": 0.0013
   },
   {
     "erpCode": "PRD0011",
@@ -144,7 +154,8 @@ export const productMaster = [
     "daysOfCoverage": 60,
     "roq": 10,
     "reviewType": "Perpetual",
-    "safetyStock": 5
+    "safetyStock": 5,
+    "holdingCostPct": 0.0008
   },
   {
     "erpCode": "PRD0012",
@@ -157,7 +168,8 @@ export const productMaster = [
     "daysOfCoverage": 40,
     "roq": 10,
     "reviewType": "Perpetual",
-    "safetyStock": 4
+    "safetyStock": 4,
+    "holdingCostPct": 0.0011
   },
   {
     "erpCode": "PRD0013",
@@ -170,7 +182,8 @@ export const productMaster = [
     "daysOfCoverage": 38,
     "roq": 8,
     "reviewType": "Perpetual",
-    "safetyStock": 3
+    "safetyStock": 3,
+    "holdingCostPct": 0.0006
   },
   {
     "erpCode": "PRD0014",
@@ -183,7 +196,8 @@ export const productMaster = [
     "daysOfCoverage": 30,
     "roq": 2,
     "reviewType": "Perpetual",
-    "safetyStock": 1
+    "safetyStock": 1,
+    "holdingCostPct": 0.0014
   },
   {
     "erpCode": "PRD0015",
@@ -196,7 +210,8 @@ export const productMaster = [
     "daysOfCoverage": 50,
     "roq": 10,
     "reviewType": "Perpetual",
-    "safetyStock": 5
+    "safetyStock": 5,
+    "holdingCostPct": 0.0009
   },
   {
     "erpCode": "PRD0016",
@@ -209,7 +224,8 @@ export const productMaster = [
     "daysOfCoverage": 65,
     "roq": 5,
     "reviewType": "Periodic",
-    "safetyStock": 3
+    "safetyStock": 3,
+    "holdingCostPct": 0.0012
   },
   {
     "erpCode": "PRD0017",
@@ -222,7 +238,8 @@ export const productMaster = [
     "daysOfCoverage": 45,
     "roq": 5,
     "reviewType": "Perpetual",
-    "safetyStock": 2
+    "safetyStock": 2,
+    "holdingCostPct": 0.0007
   },
   {
     "erpCode": "PRD0018",
@@ -235,7 +252,8 @@ export const productMaster = [
     "daysOfCoverage": 120,
     "roq": 1000,
     "reviewType": "Periodic",
-    "safetyStock": 300
+    "safetyStock": 300,
+    "holdingCostPct": 0.001
   },
   {
     "erpCode": "PRD0019",
@@ -248,7 +266,8 @@ export const productMaster = [
     "daysOfCoverage": 55,
     "roq": 100,
     "reviewType": "Periodic",
-    "safetyStock": 40
+    "safetyStock": 40,
+    "holdingCostPct": 0.0005
   },
   {
     "erpCode": "PRD0020",
@@ -261,7 +280,8 @@ export const productMaster = [
     "daysOfCoverage": 95,
     "roq": 200,
     "reviewType": "Periodic",
-    "safetyStock": 80
+    "safetyStock": 80,
+    "holdingCostPct": 0.0013
   },
   {
     "erpCode": "PRD0021",
@@ -274,7 +294,8 @@ export const productMaster = [
     "daysOfCoverage": 70,
     "roq": 150,
     "reviewType": "Periodic",
-    "safetyStock": 50
+    "safetyStock": 50,
+    "holdingCostPct": 0.0008
   },
   {
     "erpCode": "PRD0022",
@@ -287,7 +308,8 @@ export const productMaster = [
     "daysOfCoverage": 45,
     "roq": 50,
     "reviewType": "Perpetual",
-    "safetyStock": 20
+    "safetyStock": 20,
+    "holdingCostPct": 0.0011
   },
   {
     "erpCode": "PRD0023",
@@ -300,7 +322,8 @@ export const productMaster = [
     "daysOfCoverage": 100,
     "roq": 300,
     "reviewType": "Periodic",
-    "safetyStock": 150
+    "safetyStock": 150,
+    "holdingCostPct": 0.0006
   },
   {
     "erpCode": "PRD0024",
@@ -313,7 +336,8 @@ export const productMaster = [
     "daysOfCoverage": 85,
     "roq": 200,
     "reviewType": "Periodic",
-    "safetyStock": 100
+    "safetyStock": 100,
+    "holdingCostPct": 0.0014
   },
   {
     "erpCode": "PRD0025",
@@ -326,7 +350,8 @@ export const productMaster = [
     "daysOfCoverage": 50,
     "roq": 20,
     "reviewType": "Perpetual",
-    "safetyStock": 8
+    "safetyStock": 8,
+    "holdingCostPct": 0.0009
   },
   {
     "erpCode": "PRD0026",
@@ -339,7 +364,8 @@ export const productMaster = [
     "daysOfCoverage": 48,
     "roq": 10,
     "reviewType": "Perpetual",
-    "safetyStock": 5
+    "safetyStock": 5,
+    "holdingCostPct": 0.0012
   },
   {
     "erpCode": "PRD0027",
@@ -352,7 +378,8 @@ export const productMaster = [
     "daysOfCoverage": 30,
     "roq": 2000,
     "reviewType": "Periodic",
-    "safetyStock": 600
+    "safetyStock": 600,
+    "holdingCostPct": 0.0007
   },
   {
     "erpCode": "PRD0028",
@@ -365,7 +392,8 @@ export const productMaster = [
     "daysOfCoverage": 110,
     "roq": 300,
     "reviewType": "Periodic",
-    "safetyStock": 100
+    "safetyStock": 100,
+    "holdingCostPct": 0.001
   },
   {
     "erpCode": "PRD0029",
@@ -378,7 +406,8 @@ export const productMaster = [
     "daysOfCoverage": 150,
     "roq": 2000,
     "reviewType": "Periodic",
-    "safetyStock": 500
+    "safetyStock": 500,
+    "holdingCostPct": 0.0005
   },
   {
     "erpCode": "PRD0030",
@@ -391,7 +420,8 @@ export const productMaster = [
     "daysOfCoverage": 95,
     "roq": 200,
     "reviewType": "Periodic",
-    "safetyStock": 100
+    "safetyStock": 100,
+    "holdingCostPct": 0.0013
   }
 ];
 

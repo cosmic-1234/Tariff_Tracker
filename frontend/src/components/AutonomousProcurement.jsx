@@ -62,10 +62,13 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
   // Alerts configuration state
   const [showAlertsOnly, setShowAlertsOnly] = useState(true);
 
-  // Sync totalDemand when product changes
+  // Sync totalDemand and holdingCostRate when product changes
   useEffect(() => {
     if (selectedProduct) {
       setTotalDemand(selectedProduct.roq || 15);
+      // Map daily holdingCostPct from product master (e.g. 0.0008) to annual rate (e.g. 0.0008 * 365 = 29.2%)
+      const annualRate = selectedProduct.holdingCostPct ? selectedProduct.holdingCostPct * 365 : 0.15;
+      setHoldingCostRate(annualRate);
       setErpSyncStatus('IDLE');
       setErpSyncProgress(0);
       setErpLog([]);
@@ -279,39 +282,42 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
       let isLPFeasible = true;
       const Q = {};
       activeSuppliers.forEach(s => {
-        Q[s.supplierId] = s.moq;
+        Q[s.supplierId] = s.moq; // Start at 1 * MOQ
       });
 
-      const sumMOQ = activeSuppliers.reduce((sum, s) => sum + s.moq, 0);
-      if (sumMOQ > totalDemand) {
-        isLPFeasible = false;
-      }
-
-      if (isLPFeasible) {
-        const shareLimit = (dualSourcingEnabled && numActive >= 2) ? maxSharePct : 1.0;
+      let currentSum = activeSuppliers.reduce((sum, s) => sum + s.moq, 0);
+      if (currentSum < totalDemand) {
+        let remaining = totalDemand - currentSum;
+        const sortedActive = [...activeSuppliers].sort((a, b) => a.W - b.W);
         
-        activeSuppliers.forEach(s => {
-          const u = Math.floor(shareLimit * totalDemand);
-          if (s.moq > u) {
-            isLPFeasible = false;
-          }
-        });
-
-        if (isLPFeasible) {
-          let remaining = totalDemand - sumMOQ;
-          const sortedActive = [...activeSuppliers].sort((a, b) => a.W - b.W);
+        for (let s of sortedActive) {
+          const limit = (dualSourcingEnabled && numActive >= 2) ? Math.floor(maxSharePct * totalDemand) : totalDemand;
+          const maxAdd = limit - Q[s.supplierId];
+          if (maxAdd <= 0) continue;
           
+          const step = s.moq;
+          const maxSteps = Math.floor(maxAdd / step);
+          if (maxSteps <= 0) continue;
+          
+          const stepsNeeded = Math.ceil(remaining / step);
+          const stepsToAdd = Math.min(maxSteps, stepsNeeded);
+          
+          const qtyToAdd = stepsToAdd * step;
+          Q[s.supplierId] += qtyToAdd;
+          remaining -= qtyToAdd;
+          currentSum += qtyToAdd;
+          if (remaining <= 0) break;
+        }
+        
+        // If there is still remaining demand due to strict diversification limits,
+        // relax the share limit and allocate to the cheapest supplier.
+        if (remaining > 0) {
           for (let s of sortedActive) {
-            const limit = (dualSourcingEnabled && numActive >= 2) ? Math.floor(maxSharePct * totalDemand) : totalDemand;
-            const maxAdd = limit - Q[s.supplierId];
-            const toAdd = Math.min(remaining, maxAdd);
-            Q[s.supplierId] += toAdd;
-            remaining -= toAdd;
-            if (remaining === 0) break;
-          }
-
-          if (remaining > 0) {
-            isLPFeasible = false;
+            const qtyToAdd = Math.ceil(remaining / s.moq) * s.moq;
+            Q[s.supplierId] += qtyToAdd;
+            remaining -= qtyToAdd;
+            currentSum += qtyToAdd;
+            if (remaining <= 0) break;
           }
         }
       }
@@ -344,7 +350,7 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
             supplierDetails: activeSuppliers.map(s => ({
               ...s,
               qty: Q[s.supplierId],
-              sharePct: Math.round((Q[s.supplierId] / totalDemand) * 100)
+              sharePct: Math.round((Q[s.supplierId] / currentSum) * 100)
             }))
           };
         }
@@ -360,57 +366,30 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
       const sortedAll = [...supplierCosts].sort((a, b) => a.W - b.W);
       const cheapest = sortedAll[0];
       
-      if (totalDemand >= cheapest.moq) {
-        // We can allocate 100% to cheapest
-        const allocations = { [cheapest.supplierId]: totalDemand };
-        const qty = totalDemand;
-        const landedCostSum = qty * cheapest.landedCostPerUnit;
-        const holdingCostSum = (qty / 2) * cheapest.holdingCostPerUnit;
-        const ssCostSum = cheapest.safetyStockCost;
-        const riskPenaltySum = qty * cheapest.landedCostPerUnit * cheapest.riskFactor;
-        const totalCost = landedCostSum + holdingCostSum + ssCostSum + riskPenaltySum;
+      const cheapestQty = Math.ceil(totalDemand / cheapest.moq) * cheapest.moq;
+      const allocations = { [cheapest.supplierId]: cheapestQty };
+      const qty = cheapestQty;
+      const landedCostSum = qty * cheapest.landedCostPerUnit;
+      const holdingCostSum = (qty / 2) * cheapest.holdingCostPerUnit;
+      const ssCostSum = cheapest.safetyStockCost;
+      const riskPenaltySum = qty * cheapest.landedCostPerUnit * cheapest.riskFactor;
+      const totalCost = landedCostSum + holdingCostSum + ssCostSum + riskPenaltySum;
 
-        bestSolution = {
-          activeMask: 1,
-          allocations,
-          landedCost: landedCostSum,
-          holdingCost: holdingCostSum,
-          safetyStockCost: ssCostSum,
-          riskPenalty: riskPenaltySum,
-          totalCost,
-          supplierDetails: [{
-            ...cheapest,
-            qty,
-            sharePct: 100
-          }]
-        };
-        relaxationMsg = 'Constraints relaxed: Single sourcing allowed to satisfy MOQ constraints.';
-      } else {
-        // Step 2: Force order MOQ of cheapest supplier
-        const forcedQty = cheapest.moq;
-        const allocations = { [cheapest.supplierId]: forcedQty };
-        const landedCostSum = forcedQty * cheapest.landedCostPerUnit;
-        const holdingCostSum = (forcedQty / 2) * cheapest.holdingCostPerUnit;
-        const ssCostSum = cheapest.safetyStockCost;
-        const riskPenaltySum = forcedQty * cheapest.landedCostPerUnit * cheapest.riskFactor;
-        const totalCost = landedCostSum + holdingCostSum + ssCostSum + riskPenaltySum;
-
-        bestSolution = {
-          activeMask: 1,
-          allocations,
-          landedCost: landedCostSum,
-          holdingCost: holdingCostSum,
-          safetyStockCost: ssCostSum,
-          riskPenalty: riskPenaltySum,
-          totalCost,
-          supplierDetails: [{
-            ...cheapest,
-            qty: forcedQty,
-            sharePct: 100
-          }]
-        };
-        relaxationMsg = `Constraints relaxed: Forced order quantity raised to MOQ (${cheapest.moq}) for Supplier ${cheapest.supplierName}.`;
-      }
+      bestSolution = {
+        activeMask: 1,
+        allocations,
+        landedCost: landedCostSum,
+        holdingCost: holdingCostSum,
+        safetyStockCost: ssCostSum,
+        riskPenalty: riskPenaltySum,
+        totalCost,
+        supplierDetails: [{
+          ...cheapest,
+          qty,
+          sharePct: 100
+        }]
+      };
+      relaxationMsg = 'Constraints relaxed: Single sourcing allowed to satisfy MOQ constraints.';
     }
 
     return {
@@ -532,6 +511,7 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
     
     // Strategy 1: Optimized (MILP suggestion)
     const optSol = optimizationResults.solution;
+    const optSumQty = optSol.supplierDetails.reduce((sum, s) => sum + s.qty, 0);
     const optStrat = {
       name: 'Optimized Model Suggestion',
       isOpt: true,
@@ -540,11 +520,11 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
       holdingCost: optSol.holdingCost + optSol.safetyStockCost,
       riskPenalty: optSol.riskPenalty,
       totalCost: optSol.totalCost,
-      avgLeadTime: optSol.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * (s.qty / D), 0),
-      avgReliability: optSol.supplierDetails.reduce((sum, s) => sum + s.reliability * (s.qty / D), 0)
+      avgLeadTime: optSumQty > 0 ? optSol.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * s.qty, 0) / optSumQty : 0,
+      avgReliability: optSumQty > 0 ? optSol.supplierDetails.reduce((sum, s) => sum + s.reliability * s.qty, 0) / optSumQty : 0
     };
 
-    // Strategy 2: Cheapest Sourcing (100% Cheapest, respecting MOQ)
+    // Strategy 2: Cheapest Sourcing (100% Cheapest, respecting MOQ multiples)
     let cheapestAlloc = {};
     let cheapestCost = 0;
     let cheapestHold = 0;
@@ -553,22 +533,13 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
     let cheapestRel = 0;
 
     const cheapestSupp = sortedByLanded[0];
-    if (D >= cheapestSupp.moq) {
-      cheapestAlloc[cheapestSupp.supplierId] = D;
-      cheapestCost = D * cheapestSupp.landedCostPerUnit;
-      cheapestHold = (D / 2) * cheapestSupp.holdingCostPerUnit + cheapestSupp.safetyStockCost;
-      cheapestRisk = D * cheapestSupp.landedCostPerUnit * cheapestSupp.riskFactor;
-      cheapestLT = cheapestSupp.leadTimeDays;
-      cheapestRel = cheapestSupp.reliability;
-    } else {
-      // Force MOQ
-      cheapestAlloc[cheapestSupp.supplierId] = cheapestSupp.moq;
-      cheapestCost = cheapestSupp.moq * cheapestSupp.landedCostPerUnit;
-      cheapestHold = (cheapestSupp.moq / 2) * cheapestSupp.holdingCostPerUnit + cheapestSupp.safetyStockCost;
-      cheapestRisk = cheapestSupp.moq * cheapestSupp.landedCostPerUnit * cheapestSupp.riskFactor;
-      cheapestLT = cheapestSupp.leadTimeDays;
-      cheapestRel = cheapestSupp.reliability;
-    }
+    const cheapestQty = Math.ceil(D / cheapestSupp.moq) * cheapestSupp.moq;
+    cheapestAlloc[cheapestSupp.supplierId] = cheapestQty;
+    cheapestCost = cheapestQty * cheapestSupp.landedCostPerUnit;
+    cheapestHold = (cheapestQty / 2) * cheapestSupp.holdingCostPerUnit + cheapestSupp.safetyStockCost;
+    cheapestRisk = cheapestQty * cheapestSupp.landedCostPerUnit * cheapestSupp.riskFactor;
+    cheapestLT = cheapestSupp.leadTimeDays;
+    cheapestRel = cheapestSupp.reliability;
     
     const cheapStrat = {
       name: 'Lowest Landed Cost (Single Sourcing)',
@@ -581,7 +552,7 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
       avgReliability: cheapestRel
     };
 
-    // Strategy 3: Safest Sourcing (100% Lowest Risk Supplier)
+    // Strategy 3: Safest Sourcing (100% Lowest Risk Supplier, respecting MOQ multiples)
     let safestAlloc = {};
     let safestCost = 0;
     let safestHold = 0;
@@ -590,21 +561,13 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
     let safestRel = 0;
 
     const safestSupp = sortedByRisk[0];
-    if (D >= safestSupp.moq) {
-      safestAlloc[safestSupp.supplierId] = D;
-      safestCost = D * safestSupp.landedCostPerUnit;
-      safestHold = (D / 2) * safestSupp.holdingCostPerUnit + safestSupp.safetyStockCost;
-      safestRisk = D * safestSupp.landedCostPerUnit * safestSupp.riskFactor;
-      safestLT = safestSupp.leadTimeDays;
-      safestRel = safestSupp.reliability;
-    } else {
-      safestAlloc[safestSupp.supplierId] = safestSupp.moq;
-      safestCost = safestSupp.moq * safestSupp.landedCostPerUnit;
-      safestHold = (safestSupp.moq / 2) * safestSupp.holdingCostPerUnit + safestSupp.safetyStockCost;
-      safestRisk = safestSupp.moq * safestSupp.landedCostPerUnit * safestSupp.riskFactor;
-      safestLT = safestSupp.leadTimeDays;
-      safestRel = safestSupp.reliability;
-    }
+    const safestQty = Math.ceil(D / safestSupp.moq) * safestSupp.moq;
+    safestAlloc[safestSupp.supplierId] = safestQty;
+    safestCost = safestQty * safestSupp.landedCostPerUnit;
+    safestHold = (safestQty / 2) * safestSupp.holdingCostPerUnit + safestSupp.safetyStockCost;
+    safestRisk = safestQty * safestSupp.landedCostPerUnit * safestSupp.riskFactor;
+    safestLT = safestSupp.leadTimeDays;
+    safestRel = safestSupp.reliability;
     
     const safeStrat = {
       name: 'Lowest Risk Profile',
@@ -617,7 +580,7 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
       avgReliability: safestRel
     };
 
-    // Strategy 4: Current Default Split (historical supply percentages)
+    // Strategy 4: Current Default Split (historical supply percentages, respecting MOQ multiples)
     let currentCost = 0;
     let currentHold = 0;
     let currentRisk = 0;
@@ -625,29 +588,46 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
     let currentRel = 0;
     const currentAllocStrs = [];
 
+    const currentQtys = {};
+    let currentSumQty = 0;
+
     supplierCosts.forEach(s => {
       // Find original supply percentage
       const origSupp = suppliers.find(orig => orig.supplierId === s.supplierId);
       const supplyPct = origSupp ? origSupp.supplyPct : 50;
-      const qty = Math.round(D * (supplyPct / 100));
-      
-      currentAllocStrs.push(`${s.supplierName}: ${qty} units (${supplyPct}%)`);
-      currentCost += qty * s.landedCostPerUnit;
-      currentHold += qty > 0 ? ((qty / 2) * s.holdingCostPerUnit + s.safetyStockCost) : 0;
-      currentRisk += qty * s.landedCostPerUnit * s.riskFactor;
-      currentLT += qty * s.leadTimeDays;
-      currentRel += qty * s.reliability;
+      let qty = Math.round(D * (supplyPct / 100));
+      if (qty > 0) {
+        qty = Math.ceil(qty / s.moq) * s.moq;
+      }
+      currentQtys[s.supplierId] = qty;
+      currentSumQty += qty;
+    });
+
+    supplierCosts.forEach(s => {
+      const qty = currentQtys[s.supplierId];
+      if (qty > 0) {
+        const origSupp = suppliers.find(orig => orig.supplierId === s.supplierId);
+        const supplyPct = origSupp ? origSupp.supplyPct : 50;
+        const share = currentSumQty > 0 ? Math.round((qty / currentSumQty) * 100) : 0;
+        
+        currentAllocStrs.push(`${s.supplierName}: ${qty} units (${share}%)`);
+        currentCost += qty * s.landedCostPerUnit;
+        currentHold += (qty / 2) * s.holdingCostPerUnit + s.safetyStockCost;
+        currentRisk += qty * s.landedCostPerUnit * s.riskFactor;
+        currentLT += qty * s.leadTimeDays;
+        currentRel += qty * s.reliability;
+      }
     });
 
     const currentStrat = {
       name: 'Current Default Allocation (As-Is)',
-      allocations: currentAllocStrs.join(', '),
+      allocations: currentAllocStrs.join(', ') || 'No allocation',
       landedCost: currentCost,
       holdingCost: currentHold,
       riskPenalty: currentRisk,
       totalCost: currentCost + currentHold + currentRisk,
-      avgLeadTime: currentLT / D,
-      avgReliability: currentRel / D
+      avgLeadTime: currentSumQty > 0 ? currentLT / currentSumQty : 0,
+      avgReliability: currentSumQty > 0 ? currentRel / currentSumQty : 0
     };
 
     return [optStrat, cheapStrat, safeStrat, currentStrat];
@@ -1015,6 +995,19 @@ Generated autonomously via Tech Mahindra Procurement Optimizer.
                   {criticalityInfo.rating} (VED: {criticalityInfo.score.toFixed(1)})
                 </span>
               </div>
+              {suppliers.length > 0 && (
+                <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed var(--border-subtle)' }}>
+                  <div style={{ color: 'var(--text-secondary)', marginBottom: '4px', fontWeight: 500 }}>Supplier MOQ:</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingLeft: '8px' }}>
+                    {suppliers.map(s => (
+                      <div key={s.supplierId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{s.supplierName} ({s.country}):</span>
+                        <span style={{ color: 'var(--text-bright)', fontWeight: 650 }}>{s.moq} units</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1074,14 +1067,14 @@ Generated autonomously via Tech Mahindra Procurement Optimizer.
           <div className="form-group">
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
               <label className="form-label">Holding Cost Rate</label>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--warning)' }}>{(holdingCostRate * 100).toFixed(0)}% / yr</span>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--warning)' }}>{(holdingCostRate * 100).toFixed(1)}% / yr</span>
             </div>
             <input
               type="range"
               className="form-range"
-              min="0.05"
-              max="0.35"
-              step="0.05"
+              min="0.01"
+              max="0.60"
+              step="0.001"
               value={holdingCostRate}
               onChange={e => setHoldingCostRate(parseFloat(e.target.value))}
               style={{ width: '100%', accentColor: 'var(--warning)' }}

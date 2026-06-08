@@ -35,7 +35,7 @@ productRowsRaw.forEach((row, index) => {
   // Column Mapping
   const hsCode = String(cleanRow['HS Code (Mapped)'] || '').trim();
   const category = cleanRow['Category/Commodity'] || 'General';
-  const description = cleanRow['Discreption'] || cleanRow['Description'] || 'No Description';
+  const description = cleanRow['Discreption'] || cleanRow['Discription'] || cleanRow['Description'] || 'No Description';
   const inHandInventory = Number(cleanRow['In-Hand Inventory'] ?? 0);
   const inventoryValue = Number(cleanRow['Inventory Value'] ?? cleanRow['Inventory Value '] ?? 0);
   const inTransitInventory = Number(cleanRow['In-Transit Inventory (Nos)'] ?? 0);
@@ -43,6 +43,7 @@ productRowsRaw.forEach((row, index) => {
   const roq = Number(cleanRow['ROQ (Nos)'] ?? 0);
   const reviewType = cleanRow['Peroidic/Perpatual Review'] || cleanRow['Periodic/Perpetual Review'] || 'Perpetual';
   const safetyStock = Number(cleanRow['Safety Stock (Nos)'] ?? 0);
+  const holdingCostPct = Number(cleanRow['Holding cost - % of unit cost /unit/day'] ?? 0);
 
   productMaster.push({
     erpCode,
@@ -55,7 +56,8 @@ productRowsRaw.forEach((row, index) => {
     daysOfCoverage,
     roq,
     reviewType,
-    safetyStock
+    safetyStock,
+    holdingCostPct
   });
 });
 
@@ -145,7 +147,7 @@ console.log(`Successfully parsed ${supplierMaster.length} supplier relationships
 // ─────────────────────────────────────────────
 const productMasterContent = `// Product Master Data — generated dynamically from excel Product Master Prototype
 // Fields: erpCode, hsCode, category, description, inHandInventory, inventoryValue,
-//         inTransitInventory, daysOfCoverage, roq, reviewType, safetyStock
+//         inTransitInventory, daysOfCoverage, roq, reviewType, safetyStock, holdingCostPct
 
 export const productMaster = ${JSON.stringify(productMaster, null, 2)};
 

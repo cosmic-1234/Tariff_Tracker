@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   ShieldAlert, Settings2, FileSpreadsheet, Plus, Upload, Download, Filter, 
-  Trash2, Edit3, CheckCircle2, ChevronRight, Layers, Sliders, MapPin, RefreshCw
+  Trash2, Edit3, CheckCircle2, ChevronRight, ChevronLeft, Layers, Sliders, MapPin, RefreshCw
 } from 'lucide-react';
 import { productMaster } from '../data/productMaster.js';
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
@@ -158,6 +158,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const containerRef = useRef(null);
   const [dimensions, setDimensions] = useState({ width: 450, height: 380 });
+  const [isInputPanelCollapsed, setIsInputPanelCollapsed] = useState(false);
   
   // Collapse configurations
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -673,17 +674,69 @@ export default function CriticalityScoring({ currency, convertAmount }) {
   // Currency Formatter
   const fmt = (amount) => formatCurrency(amount, currency);
 
-  // --- SETTINGS CONFIGURATION ACTIONS ---
+  const adjustWeights = (prevWeights, field, targetVal) => {
+    const keys = Object.keys(prevWeights);
+    const otherKeys = keys.filter(k => k !== field);
+    const oldVal = prevWeights[field];
+    const newVal = Number(targetVal);
+    const diff = newVal - oldVal;
+
+    if (diff === 0) return prevWeights;
+
+    const updated = { ...prevWeights, [field]: newVal };
+
+    let remainingDiff = -diff;
+    let activeKeys = [...otherKeys];
+
+    // Iterative redistribution to respect 0-1 bounds
+    while (Math.abs(remainingDiff) > 0.0001 && activeKeys.length > 0) {
+      const changePerKey = remainingDiff / activeKeys.length;
+      const nextActiveKeys = [];
+      let nextRemainingDiff = 0;
+
+      for (const key of activeKeys) {
+        const currentVal = updated[key];
+        const proposedVal = currentVal + changePerKey;
+
+        if (proposedVal < 0) {
+          updated[key] = 0;
+          const appliedChange = -currentVal;
+          nextRemainingDiff += (changePerKey - appliedChange);
+        } else if (proposedVal > 1) {
+          updated[key] = 1;
+          const appliedChange = 1 - currentVal;
+          nextRemainingDiff += (changePerKey - appliedChange);
+        } else {
+          updated[key] = proposedVal;
+          nextActiveKeys.push(key);
+        }
+      }
+
+      activeKeys = nextActiveKeys;
+      remainingDiff = nextRemainingDiff;
+    }
+
+    // Force strict 1.0 sum normalization for microscopic rounding error
+    const sum = keys.reduce((s, k) => s + updated[k], 0);
+    if (Math.abs(sum - 1.0) > 0.0001) {
+      const adjustKey = otherKeys.find(k => updated[k] > 0 && updated[k] < 1) || otherKeys[0];
+      updated[adjustKey] = Math.max(0, Math.min(1, updated[adjustKey] + (1.0 - sum)));
+    }
+
+    // Round to 4 decimals to avoid float representation issues in state
+    for (const k of keys) {
+      updated[k] = Math.round(updated[k] * 10000) / 10000;
+    }
+
+    return updated;
+  };
+
   const handleUpdateSdeWeight = (field, val) => {
-    setSdeWeights(prev => {
-      const updated = { ...prev, [field]: Number(val) };
-      const sum = Object.values(updated).reduce((a, b) => a + b, 0);
-      return updated;
-    });
+    setSdeWeights(prev => adjustWeights(prev, field, val));
   };
 
   const handleUpdateVedWeight = (field, val) => {
-    setVedWeights(prev => ({ ...prev, [field]: Number(val) }));
+    setVedWeights(prev => adjustWeights(prev, field, val));
   };
 
   const handleAddCountryRisk = () => {
@@ -954,7 +1007,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "SDE_VED_Criticality_Template.csv");
+    link.setAttribute("download", "SDE_VED_Inventory_Analysis_Template.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -962,10 +1015,10 @@ export default function CriticalityScoring({ currency, convertAmount }) {
 
   const handleExportScoredCSV = () => {
     const headers = [
-      'ERP Code', 'HS Code', 'Category', 'Description', 'In-Hand Inventory', 'Inventory Value',
-      'In-Transit Inventory', 'Days of Cover', 'ROQ', 'Safety Stock', 'SDE Score', 'VED Score',
+      'ERP Code', 'HS Code', 'Category', 'Description', 'In-Hand Inventory',
+      'Inventory Value', 'In-Transit Inventory', 'Days of Cover', 'ROQ', 'Safety Stock', 'SDE Score', 'VED Score',
       'Composite Score', 'Criticality Band', 'Buffer-to-Lead-Time Ratio', 'MOQ Stress Ratio',
-      'Supplier Dependency Flag', 'Stockout Exposure Flag', 'Inventory Exposure Value'
+      'Supplier Dependency Flag', 'Stockout Exposure Flag'
     ];
     
     const rows = filteredComponents.map(item => [
@@ -986,8 +1039,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
       item.bufferRatio.toFixed(2),
       item.moqRatio.toFixed(2),
       item.supplierDependencyFlag,
-      item.stockoutExposureFlag,
-      item.inventoryExposureValue.toFixed(2)
+      item.stockoutExposureFlag
     ]);
     
     const csvContent = "data:text/csv;charset=utf-8," 
@@ -996,7 +1048,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "Scored_Inventory_Criticality.csv");
+    link.setAttribute("download", "Scored_Inventory_Analysis.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1040,17 +1092,17 @@ export default function CriticalityScoring({ currency, convertAmount }) {
               <div style={{ fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '10px' }}>SDE procurement difficulty sub-factors weights (Sum: 1.0)</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {[
-                  { key: 'concentration', label: 'Supplier Concentration (25%)' },
-                  { key: 'leadTime', label: 'Lead Time (20%)' },
-                  { key: 'reliability', label: 'Reliability/OTIF (20%)' },
-                  { key: 'buffer', label: 'Buffer Ratio (20%)' },
-                  { key: 'moq', label: 'MOQ Rigidity (10%)' },
-                  { key: 'geography', label: 'Geography Risk (5%)' }
+                  { key: 'concentration', name: 'Supplier Concentration' },
+                  { key: 'leadTime', name: 'Lead Time' },
+                  { key: 'reliability', name: 'Reliability/OTIF' },
+                  { key: 'buffer', name: 'Buffer Ratio' },
+                  { key: 'moq', name: 'MOQ Rigidity' },
+                  { key: 'geography', name: 'Geography Risk' }
                 ].map(w => (
                   <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>{w.label}</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{w.name} ({Math.round((sdeWeights[w.key] || 0) * 100)}%)</span>
                     <input 
-                      type="range" min="0" max="0.5" step="0.05" 
+                      type="range" min="0" max="1.0" step="0.01" 
                       value={sdeWeights[w.key]} 
                       onChange={(e) => handleUpdateSdeWeight(w.key, e.target.value)} 
                       style={{ width: '100px', accentColor: 'var(--accent-primary)' }}
@@ -1065,54 +1117,20 @@ export default function CriticalityScoring({ currency, convertAmount }) {
               <div style={{ fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '10px' }}>VED production criticality sub-factors weights (Sum: 1.0)</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {[
-                  { key: 'prodStop', label: 'Line Stoppage (35%)' },
-                  { key: 'bottleneck', label: 'Bottleneck Dep (20%)' },
-                  { key: 'substitutability', label: 'Substitutability (20%)' },
-                  { key: 'safetyQuality', label: 'Safety & Quality (15%)' },
-                  { key: 'recovery', label: 'Recovery Time (10%)' }
+                  { key: 'prodStop', name: 'Line Stoppage' },
+                  { key: 'bottleneck', name: 'Bottleneck Dep' },
+                  { key: 'substitutability', name: 'Substitutability' },
+                  { key: 'safetyQuality', name: 'Safety & Quality' },
+                  { key: 'recovery', name: 'Recovery Time' }
                 ].map(w => (
                   <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>{w.label}</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{w.name} ({Math.round((vedWeights[w.key] || 0) * 100)}%)</span>
                     <input 
-                      type="range" min="0" max="0.5" step="0.05" 
+                      type="range" min="0" max="1.0" step="0.01" 
                       value={vedWeights[w.key]} 
                       onChange={(e) => handleUpdateVedWeight(w.key, e.target.value)} 
                       style={{ width: '100px', accentColor: 'var(--accent-primary)' }}
                     />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Country Tiers Editor */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 650, fontSize: '13px', color: 'var(--text-accent)', marginBottom: '8px' }}>
-                <MapPin size={14} />
-                Country Risk Tier mappings
-              </div>
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                <input 
-                  type="text" placeholder="Country name" className="form-input form-input-sm" style={{ flex: 1 }}
-                  value={newCountryName} onChange={e => setNewCountryName(e.target.value)}
-                />
-                <select 
-                  className="form-input form-input-sm" style={{ width: '60px' }}
-                  value={newCountryRisk} onChange={e => setNewCountryRisk(Number(e.target.value))}
-                >
-                  {[1,2,3,4,5].map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-                <button className="btn btn-primary btn-sm" onClick={handleAddCountryRisk}>Add</button>
-              </div>
-              
-              <div className="custom-scrollbar" style={{ maxHeight: '110px', overflowY: 'auto', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '6px' }}>
-                {Object.entries(countryTiers).map(([c, risk]) => (
-                  <div key={c} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 4px', fontSize: '11.5px', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
-                    <span>{c} <span style={{ color: 'var(--text-muted)' }}>(Risk: {risk})</span></span>
-                    {c !== 'Other' && (
-                      <button style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }} onClick={() => handleRemoveCountryRisk(c)}>
-                        ✕
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>
@@ -1148,10 +1166,26 @@ export default function CriticalityScoring({ currency, convertAmount }) {
       </div>
 
       {/* TWO-COLUMN GRID: 5X5 MATRIX VS INPUT FORM */}
-      <div className="criticality-layout-grid">
+      <div 
+        className="criticality-layout-grid" 
+        style={{ 
+          display: 'grid', 
+          gridTemplateColumns: isInputPanelCollapsed ? '1fr 80px' : '1fr 1fr', 
+          transition: 'grid-template-columns 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+          gap: '20px',
+          alignItems: 'start'
+        }}
+      >
         
-        {/* Left Side: 5x5 Heatmap Matrix Card */}
-        <div className="glass-card animate-slide-up" style={{ display: 'flex', flexDirection: 'column' }}>
+        {/* Left Side: Sourcing & Criticality Treemap View */}
+        <div 
+          className="glass-card animate-slide-up" 
+          style={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            padding: '24px'
+          }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
             <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Layers size={18} className="icon" />
@@ -1437,10 +1471,37 @@ export default function CriticalityScoring({ currency, convertAmount }) {
         </div>
 
         {/* Right Side: Manual input form and CSV bulk upload */}
-        <div className="glass-card animate-slide-up" style={{ display: 'flex', flexDirection: 'column' }}>
-          
-          {/* Tabs */}
-          <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', marginBottom: '14px' }}>
+        <div 
+          className="glass-card animate-slide-up" 
+          style={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            padding: isInputPanelCollapsed ? '12px 8px' : '24px',
+            transition: 'padding 0.35s ease',
+            minHeight: '446px'
+          }}
+        >
+          {isInputPanelCollapsed ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', height: '100%' }}>
+              <button
+                type="button"
+                onClick={() => setIsInputPanelCollapsed(false)}
+                className="btn btn-secondary btn-sm"
+                style={{ padding: '6px', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Expand Sourcing Input Panel"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px', alignItems: 'center' }}>
+                <Upload size={18} style={{ opacity: 0.6 }} title="CSV Bulk Import" />
+                <Plus size={18} style={{ opacity: 0.6 }} title="Manual Component Entry" />
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Tabs with Collapse Button */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <div style={{ display: 'flex', flex: 1, background: 'var(--bg-tertiary)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
             <button 
               onClick={() => setActiveTab('upload')}
               className={`tab ${activeTab === 'upload' ? 'active' : ''}`}
@@ -1458,8 +1519,18 @@ export default function CriticalityScoring({ currency, convertAmount }) {
               {editingComponent ? 'Edit Component' : 'Manual Component Entry'}
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsInputPanelCollapsed(true)}
+            className="btn btn-secondary btn-sm"
+            style={{ marginLeft: '12px', padding: '6px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            title="Collapse Sourcing Input Panel"
+          >
+            <ChevronRight size={15} />
+          </button>
+        </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             {/* Tab 1: CSV Upload */}
             {activeTab === 'upload' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', justifyContent: 'center', height: '100%' }}>
@@ -1669,8 +1740,10 @@ export default function CriticalityScoring({ currency, convertAmount }) {
               </form>
             )}
           </div>
-        </div>
-      </div>
+        </>
+      )}
+    </div>
+  </div>
 
       {/* DETAILED TABLE LIST OF COMPONENTS */}
       <div className="glass-card animate-slide-up">
@@ -1730,7 +1803,6 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                 <th>Band</th>
                 <th>Stockout Flag</th>
                 <th>Inv Value</th>
-                <th>Exposure Value</th>
                 <th style={{ textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
@@ -1757,10 +1829,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
                       <span className="badge success" style={{ fontSize: '10px', opacity: 0.6 }}>OK</span>
                     )}
                   </td>
-                  
-                  {/* Values */}
                   <td style={{ fontWeight: 650, color: 'var(--success)' }}>{fmt(convertAmount(comp.inventoryValue))}</td>
-                  <td style={{ fontWeight: 750, color: 'var(--success)' }}>{fmt(convertAmount(comp.inventoryExposureValue))}</td>
                   
                   {/* Actions */}
                   <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
@@ -1779,7 +1848,7 @@ export default function CriticalityScoring({ currency, convertAmount }) {
               ))}
               {filteredComponents.length === 0 && (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--text-muted)' }}>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--text-muted)' }}>
                     No component scoring records found matching active filter.
                   </td>
                 </tr>

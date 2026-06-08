@@ -1,4 +1,4 @@
-// Tariff Calculator Engine
+// Tariff Impact Calculator Engine
 // All auto-calculated (*) fields are computed here
 
 import { getProductByHSCode, getProductByERPCode, getInventoryCriticality } from '../data/productMaster.js';
@@ -83,7 +83,7 @@ export function calculateTariff(hsCode, destinationCountry, supplierInputs) {
     const corridors = getApplicableCorridors(originRegion, destRegion);
 
     // Notifications
-    const notifications = generateNotifications(product, supplierData, tariffPct, fob, totalLandedCost);
+    const notifications = generateNotifications(product, supplierData, tariffPct, fob, totalLandedCost, suppliers);
 
     return {
       supplierId: supplierData.supplierId,
@@ -137,14 +137,14 @@ export function calculateTariff(hsCode, destinationCountry, supplierInputs) {
 /**
  * Generate notifications based on business rules
  */
-function generateNotifications(product, supplier, tariffPct, fob, totalLandedCost) {
+function generateNotifications(product, supplier, tariffPct, fob, totalLandedCost, suppliers = []) {
   const notifications = [];
 
-  // High tariff alert
-  if (tariffPct >= 20) {
+  // Single sourcing risk
+  if (suppliers.length === 1) {
     notifications.push({
       type: 'warning',
-      message: `High tariff rate of ${tariffPct}% from ${supplier.country}. Consider alternative sourcing.`,
+      message: `Single sourcing risk: only one supplier (${supplier.supplierName}) is registered for this product in Supplier Master.`,
     });
   }
 
@@ -154,15 +154,38 @@ function generateNotifications(product, supplier, tariffPct, fob, totalLandedCos
       type: 'critical',
       message: `Critical inventory: only ${product.daysOfCoverage} days of coverage remaining.`,
     });
+  } else if (product.daysOfCoverage <= 30) {
+    notifications.push({
+      type: 'warning',
+      message: `Low inventory: only ${product.daysOfCoverage} days of coverage remaining. Safety stock is at risk.`,
+    });
+  }
+
+  // High tariff alert
+  if (tariffPct >= 20) {
+    notifications.push({
+      type: 'critical',
+      message: `Severe tariff rate of ${tariffPct}% from ${supplier.country}. Sourcing alternative is highly advised.`,
+    });
+  } else if (tariffPct >= 12) {
+    notifications.push({
+      type: 'warning',
+      message: `High tariff rate of ${tariffPct}% from ${supplier.country}. Consider alternative trade channels.`,
+    });
   }
 
   // Cost impact alert
   if (fob > 0) {
     const costIncreasePct = ((totalLandedCost - fob) / fob * 100).toFixed(1);
-    if (costIncreasePct > 30) {
+    if (parseFloat(costIncreasePct) > 25) {
       notifications.push({
         type: 'warning',
-        message: `Total cost increase of ${costIncreasePct}% over FOB. Review cost structure.`,
+        message: `High landed cost overhead: total cost is ${costIncreasePct}% higher than FOB base price.`,
+      });
+    } else if (parseFloat(costIncreasePct) > 15) {
+      notifications.push({
+        type: 'info',
+        message: `Landed cost overhead is ${costIncreasePct}% over FOB base price.`,
       });
     }
   }
@@ -170,16 +193,26 @@ function generateNotifications(product, supplier, tariffPct, fob, totalLandedCos
   // Low reliability supplier
   if (supplier.reliability < 85) {
     notifications.push({
-      type: 'info',
-      message: `Supplier reliability at ${supplier.reliability}%. Consider diversification.`,
+      type: 'critical',
+      message: `Critical reliability: supplier reliability is extremely low at ${supplier.reliability}%.`,
+    });
+  } else if (supplier.reliability < 92) {
+    notifications.push({
+      type: 'warning',
+      message: `Sub-optimal reliability: supplier reliability is ${supplier.reliability}%. Monitor fulfillment rates closely.`,
     });
   }
 
   // Long lead time
-  if (supplier.leadTimeDays > 45) {
+  if (supplier.leadTimeDays > 40) {
+    notifications.push({
+      type: 'warning',
+      message: `Extended lead time of ${supplier.leadTimeDays} days may cause production delays.`,
+    });
+  } else if (supplier.leadTimeDays > 25) {
     notifications.push({
       type: 'info',
-      message: `Extended lead time of ${supplier.leadTimeDays} days. Monitor closely.`,
+      message: `Lead time of ${supplier.leadTimeDays} days. Factor this into order planning.`,
     });
   }
 

@@ -401,7 +401,7 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
           <div className="card-title">
             <Info size={18} className="icon" />
             Product Information
-            <span className="badge info" style={{ marginLeft: 'auto' }}>Auto-populated from Master Data</span>
+            <span className="badge info" style={{ marginLeft: 'auto' }}>Auto-populated from Supplier Master</span>
           </div>
           <div className="grid-3">
             <div>

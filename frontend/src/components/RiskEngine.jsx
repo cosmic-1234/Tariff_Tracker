@@ -3,6 +3,7 @@ import { Layers, ShieldAlert, DollarSign, Activity, AlertTriangle, Filter, Check
 import { getInventoryRiskRecords, getRiskSummary } from '../engine/inventoryAnalysis.js';
 import { DEFAULT_WEIGHTS_A, DEFAULT_WEIGHTS_B, DEFAULT_THRESHOLDS, clamp } from '../engine/riskScoringModel.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
+import { getSuppliersForProduct } from '../data/supplierMaster.js';
 
 
 const CustomizedTreemapContent = (props) => {
@@ -839,7 +840,7 @@ export default function RiskEngine({ currency, convertAmount }) {
 
     // Risk quick filter tabs
     if (riskFilter !== 'All') {
-      result = result.filter(p => p.riskLevel === riskFilter);
+      result = result.filter(p => p.riskBand === riskFilter);
     }
 
     return result;
@@ -1102,7 +1103,7 @@ export default function RiskEngine({ currency, convertAmount }) {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {/* Quick Filter Tabs */}
             <div style={{ display: 'flex', border: '1px solid var(--border-medium)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-              {['All', 'Critical', 'Medium', 'Low'].map(r => (
+              {['All', 'Critical', 'High', 'Moderate', 'Low'].map(r => (
                 <button
                   key={r}
                   onClick={() => setRiskFilter(r)}
@@ -1116,7 +1117,7 @@ export default function RiskEngine({ currency, convertAmount }) {
                     color: riskFilter === r ? 'white' : 'var(--text-secondary)'
                   }}
                 >
-                  {r} ({r === 'All' ? records.length : records.filter(p => p.riskLevel === r).length})
+                  {r} ({r === 'All' ? records.length : records.filter(p => p.riskBand === r).length})
                 </button>
               ))}
             </div>
@@ -1148,12 +1149,12 @@ export default function RiskEngine({ currency, convertAmount }) {
                 <th>HS Code</th>
                 <th>Category</th>
                 <th>Description</th>
+                <th>No. of Suppliers</th>
                 <th>In-Hand</th>
                 <th>SDE*VED Cell</th>
                 <th>0–100 Risk Score</th>
                 <th>Risk Band</th>
                 <th>Lead Time</th>
-                <th>Inv. Value</th>
                 <th style={{ textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
@@ -1166,6 +1167,7 @@ export default function RiskEngine({ currency, convertAmount }) {
                     <td style={{ fontFamily: 'monospace' }}>{p.hsCode}</td>
                     <td><span className="badge neutral">{p.category}</span></td>
                     <td style={{ fontWeight: 500 }}>{p.description}</td>
+                    <td style={{ fontWeight: 600 }}>{getSuppliersForProduct(p.erpCode).length}</td>
                     <td>{p.inHandInventory}</td>
                     
                     {/* Legacy SDE*VED Cell */}
@@ -1199,7 +1201,6 @@ export default function RiskEngine({ currency, convertAmount }) {
                     </td>
 
                     <td>{p.maxLeadTime} days</td>
-                    <td style={{ fontWeight: 700, color: 'var(--success)' }}>{fmt(p.inventoryValue)}</td>
                     <td style={{ textAlign: 'center' }}>
                       <button 
                         className="btn btn-secondary btn-sm" 

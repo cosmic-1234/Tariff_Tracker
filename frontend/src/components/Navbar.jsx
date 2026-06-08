@@ -31,10 +31,10 @@ const navConfig = [
     type: 'mega',
     icon: <Wrench size={17} />,
     items: [
+      { id: 'calculator',  label: 'Tariff Impact Calculator' },
+      { id: 'scoring',     label: 'Inventory Analysis' },
+      { id: 'riskengine',  label: 'Risk Factor Analysis' },
       { id: 'procurement', label: 'Autonomous Procurement' },
-      { id: 'calculator',  label: 'Tariff Calculator' },
-      { id: 'scoring',     label: 'Criticality Scoring' },
-      { id: 'riskengine',  label: 'Risk Engine' },
     ],
   },
   {
@@ -44,7 +44,7 @@ const navConfig = [
     icon: <Database size={17} />,
     items: [
       { id: 'products',   label: 'Product Master' },
-      { id: 'masterdata', label: 'Master Data' },
+      { id: 'masterdata', label: 'Supplier Master' },
     ],
   },
 ];

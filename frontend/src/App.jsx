@@ -61,12 +61,12 @@ function App() {
   const pageTitle = {
     dashboard:    'Dashboard',
     procurement:  'Autonomous Procurement Optimizer',
-    calculator:   'Tariff Calculator',
-    scoring:      'SDE-VED Criticality Scoring Tool',
+    calculator:   'Tariff Impact Calculator',
+    scoring:      'Inventory Analysis',
     classification: 'Inventory Risk Analysis (SDE/VED)',
-    riskengine:   'Risk Engine',
+    riskengine:   'Risk Factor Analysis',
     products:     'Product Master',
-    masterdata:   'Master Data',
+    masterdata:   'Supplier Master',
   };
 
   const renderPage = () => {
