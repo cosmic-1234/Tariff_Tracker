@@ -1,6 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Layers, ShieldAlert, DollarSign, Activity, AlertTriangle, Filter, CheckCircle2 } from 'lucide-react';
-import { getInventoryRiskRecords, getRiskSummary } from '../engine/inventoryAnalysis.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
 const CustomizedTreemapContent = (props) => {
@@ -248,7 +247,7 @@ function computeTreemapLayout(items, x, y, width, height) {
   }
 }
 
-export default function InventoryClassification({ currency, convertAmount, products, suppliers }) {
+export default function InventoryClassification({ currency, convertAmount, products, suppliers, riskRecords = [], riskSummary = null }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCell, setSelectedCell] = useState(null); // format: { sde: 'S', ved: 'V' }
   const [riskFilter, setRiskFilter] = useState('All');
@@ -276,8 +275,19 @@ export default function InventoryClassification({ currency, convertAmount, produ
     return () => resizeObserver.disconnect();
   }, []);
 
-  const records = useMemo(() => getInventoryRiskRecords(), [products, suppliers]);
-  const summary = useMemo(() => getRiskSummary(), [products, suppliers]);
+  const records = riskRecords;
+  const summary = riskSummary || {
+    totalValue: 0,
+    riskSegments: {
+      Critical: { count: 0, value: 0 },
+      High: { count: 0, value: 0 },
+      Moderate: { count: 0, value: 0 },
+      Low: { count: 0, value: 0 }
+    },
+    sdeSegments: { S: { count: 0, value: 0 }, D: { count: 0, value: 0 }, E: { count: 0, value: 0 } },
+    vedSegments: { V: { count: 0, value: 0 }, E: { count: 0, value: 0 }, D: { count: 0, value: 0 } },
+    avgRiskScore: 0
+  };
 
   // Format currencies helper
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);

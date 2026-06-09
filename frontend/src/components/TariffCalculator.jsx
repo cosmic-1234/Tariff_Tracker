@@ -3,8 +3,7 @@ import { Search, Calculator, ArrowRight, AlertTriangle, Info, MapPin, Ship, Plan
 import { productMaster, getProductByHSCode, getProductByERPCode, getInventoryCriticality } from '../data/productMaster.js';
 import { getSuppliersForProduct, getSupplierCountries } from '../data/supplierMaster.js';
 import { countries, transportModes, getRegionForCountry, getApplicableCorridors } from '../data/masterData.js';
-import { calculateTariff, compareSuppliers } from '../engine/tariffCalculator.js';
-import { runPairedScenarios, runSensitivityMatrix } from '../engine/scenarioAnalysis.js';
+import { calculateTariffAPI, runScenarioSimulation } from '../services/dataService.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 import { lookupHSCodeDescription, getHSCodesRecommendation } from '../services/tariffLookupService.js';
 
@@ -47,6 +46,9 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
   const [liveSuggestions, setLiveSuggestions] = useState([]);
   const [isSearchingApi, setIsSearchingApi] = useState(false);
   const [calcResult, setCalcResult] = useState(savedState?.calcResult || null);
+  const [comparison, setComparison] = useState(savedState?.comparison || null);
+  const [sensitivityData, setSensitivityData] = useState(savedState?.sensitivityData || null);
+  const [isCalculating, setIsCalculating] = useState(false);
 
   // Scenario state
   const [scenarioIncreasePct, setScenarioIncreasePct] = useState(savedState?.scenarioIncreasePct !== undefined ? savedState.scenarioIncreasePct : 25);
@@ -150,8 +152,21 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
   // Auto-recalculate in real-time when inputs change if we've already done an initial calculation
   useEffect(() => {
     if (calcResult && selectedProduct && supplierInputs.length > 0) {
-      const result = calculateTariff(hsCode, destinationCountry, supplierInputs);
-      setCalcResult(result);
+      let isCurrent = true;
+      setIsCalculating(true);
+      calculateTariffAPI(hsCode, destinationCountry, supplierInputs)
+        .then(({ result, comparison: comp }) => {
+          if (isCurrent) {
+            setCalcResult(result);
+            setComparison(comp);
+            setIsCalculating(false);
+          }
+        })
+        .catch(err => {
+          console.error(err);
+          if (isCurrent) setIsCalculating(false);
+        });
+      return () => { isCurrent = false; };
     }
   }, [supplierInputs, hsCode, destinationCountry, selectedProduct]);
 
@@ -172,12 +187,15 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
       scenarioUnitsA,
       scenarioUnitsB,
       selectedScenarioSupplier,
+      comparison,
+      sensitivityData
     };
     sessionStorage.setItem('tariff_tracker_calculator_state', JSON.stringify(stateToSave));
   }, [
     hsCode, selectedProduct, destinationCountry, suppliers, supplierInputs,
     showScenario, calcResult, scenarioIncreasePct, scenarioDecreasePct,
-    scenarioFobA, scenarioFobB, scenarioUnitsA, scenarioUnitsB, selectedScenarioSupplier
+    scenarioFobA, scenarioFobB, scenarioUnitsA, scenarioUnitsB, selectedScenarioSupplier,
+    comparison, sensitivityData
   ]);
 
   // Handler for custom overrides from the breakdown card
@@ -213,38 +231,39 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
   const handleCalculate = useCallback(() => {
     if (!selectedProduct || supplierInputs.length === 0) return;
 
-    const result = calculateTariff(hsCode, destinationCountry, supplierInputs);
-    setCalcResult(result);
-    setShowScenario(true);
+    setIsCalculating(true);
+    calculateTariffAPI(hsCode, destinationCountry, supplierInputs)
+      .then(({ result, comparison: comp }) => {
+        setCalcResult(result);
+        setComparison(comp);
+        setShowScenario(true);
+        setIsCalculating(false);
+      })
+      .catch(err => {
+        console.error(err);
+        setIsCalculating(false);
+      });
   }, [hsCode, destinationCountry, selectedProduct, supplierInputs]);
 
-  // ── Scenario Results ──
-  const scenarioResults = useMemo(() => {
-    if (!calcResult || !calcResult.supplierResults || calcResult.supplierResults.length === 0) return null;
-    const baseResult = calcResult.supplierResults[selectedScenarioSupplier] || calcResult.supplierResults[0];
-    return runPairedScenarios(
-      baseResult,
-      scenarioIncreasePct,
-      scenarioDecreasePct,
-      scenarioFobA || null,
-      scenarioFobB || null,
-      scenarioUnitsA || null,
-      scenarioUnitsB || null,
-    );
-  }, [calcResult, selectedScenarioSupplier, scenarioIncreasePct, scenarioDecreasePct, scenarioFobA, scenarioFobB, scenarioUnitsA, scenarioUnitsB]);
-
   // ── Sensitivity Matrix ──
-  const sensitivityData = useMemo(() => {
-    if (!calcResult || !calcResult.supplierResults || calcResult.supplierResults.length === 0) return null;
+  useEffect(() => {
+    if (!calcResult || !calcResult.supplierResults || calcResult.supplierResults.length === 0) {
+      setSensitivityData(null);
+      return;
+    }
     const baseResult = calcResult.supplierResults[selectedScenarioSupplier] || calcResult.supplierResults[0];
-    return runSensitivityMatrix(baseResult);
-  }, [calcResult, selectedScenarioSupplier]);
+    if (!baseResult) return;
 
-  // ── Supplier Comparison ──
-  const comparison = useMemo(() => {
-    if (!calcResult || !calcResult.supplierResults || calcResult.supplierResults.length < 2) return null;
-    return compareSuppliers(calcResult.supplierResults);
-  }, [calcResult]);
+    let isCurrent = true;
+    runScenarioSimulation({ type: 'sensitivity', baseResult })
+      .then(res => {
+        if (isCurrent && res.success) {
+          setSensitivityData(res.matrix);
+        }
+      })
+      .catch(err => console.error(err));
+    return () => { isCurrent = false; };
+  }, [calcResult, selectedScenarioSupplier]);
 
   // ── Format helpers ──
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);

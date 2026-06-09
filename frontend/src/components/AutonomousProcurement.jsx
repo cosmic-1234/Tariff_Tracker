@@ -15,7 +15,7 @@ import {
   getOtherDutiesPct 
 } from '../data/masterData.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
-import { getVedClassification } from '../engine/inventoryAnalysis.js';
+import { optimizeProcurement } from '../services/dataService.js';
 
 // --- SEED-BASED PSEUDO-RANDOM NUMBER GENERATOR FOR CONSISTENT SIMULATION ---
 function createSeededRandom(seedString) {
@@ -31,7 +31,7 @@ function createSeededRandom(seedString) {
   };
 }
 
-export default function AutonomousProcurement({ currency, convertAmount, products = productMaster, allSuppliers = supplierMaster }) {
+export default function AutonomousProcurement({ currency, convertAmount, products = productMaster, allSuppliers = supplierMaster, riskRecords = [] }) {
   // --- STATE ---
   const [selectedProduct, setSelectedProduct] = useState(products[0]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -103,12 +103,15 @@ export default function AutonomousProcurement({ currency, convertAmount, product
   // Criticality category name helper
   const criticalityInfo = useMemo(() => {
     if (!selectedProduct) return { rating: 'Medium', score: 3 };
-    const ved = getVedClassification(selectedProduct.category, selectedProduct.daysOfCoverage);
-    return {
-      rating: ved.classification === 'V' ? 'Vital' : ved.classification === 'E' ? 'Essential' : 'Desirable',
-      score: ved.score
-    };
-  }, [selectedProduct]);
+    const record = riskRecords.find(r => r.erpCode === selectedProduct.erpCode);
+    if (record) {
+      return {
+        rating: record.vedClass === 'V' ? 'Vital' : record.vedClass === 'E' ? 'Essential' : 'Desirable',
+        score: record.vedScore
+      };
+    }
+    return { rating: 'Medium', score: 3 };
+  }, [selectedProduct, riskRecords]);
 
   // Calculate inventory alerts and status for all products
   const productAlerts = useMemo(() => {
@@ -180,224 +183,43 @@ export default function AutonomousProcurement({ currency, convertAmount, product
   }, [productAlerts, showAlertsOnly]);
 
   // --- SOLVER FUNCTION IMPLEMENTATION ---
-  const optimizationResults = useMemo(() => {
-    if (!selectedProduct || suppliers.length === 0) return null;
+  const [optimizationResults, setOptimizationResults] = useState(null);
+  const [isOptimizing, setIsOptimizing] = useState(false);
 
-    // 1. Calculate base unit cost (FOB)
-    const inventoryVal = parseFloat(selectedProduct.inventoryValue) || 0;
-    const inHand = parseInt(selectedProduct.inHandInventory) || 0;
-    const unitCost = (inventoryVal > 0 && inHand > 0) ? (inventoryVal / inHand) : 11;
+  useEffect(() => {
+    if (!selectedProduct || suppliers.length === 0) {
+      setOptimizationResults(null);
+      return;
+    }
 
-    // 2. Fetch metrics for each supplier
-    const supplierCosts = suppliers.map(s => {
-      const originCountry = s.country;
-      const originRegion = s.region;
-      const originCountryCode = s.countryCode;
-      const destRegion = getRegionForCountry(destinationCountry);
-      const transportMode = s.defaultTransport || 'Ship/Ocean';
-
-      // Get rates
-      const tariffPct = getTariffRate(destinationCountry, selectedProduct.hsCode, originCountryCode);
-      const insurancePct = getInsuranceCostPct(transportMode, originRegion, destRegion);
-      const freightPct = getShippingCostPct(transportMode, originRegion, destRegion);
-      const otherDutiesPct = getOtherDutiesPct(destinationCountry);
-
-      // Landed cost factor
-      const landedFactor = 1 + (tariffPct + insurancePct + freightPct + otherDutiesPct) / 100;
-      const landedCostPerUnit = unitCost * landedFactor;
-
-      // Safety stock standard deviation
-      const reliability = s.reliability || 90;
-      const ltDays = s.leadTimeDays || 15;
-      const sigmaLT = ltDays * (0.1 + (1 - reliability / 100) * 0.5);
-      const safetyStockQty = serviceLevelZ * sigmaLT * dailyUse;
-
-      // Supplier Risk Score out of 100
-      const relRisk = 100 - reliability;
-      const corridorRisk = originRegion === 'Asia' ? 70 : originRegion === 'EU' ? 35 : 10;
-      const tariffRisk = Math.min(100, tariffPct * 3);
-      const ltRisk = Math.min(100, sigmaLT * 4);
-      const riskScore = 0.35 * relRisk + 0.25 * corridorRisk + 0.20 * tariffRisk + 0.20 * ltRisk;
-
-      // Criticality multiplier based on VED classification
-      let criticalityFactor = 1.0;
-      if (criticalityInfo.rating === 'Vital') criticalityFactor = 1.5;
-      else if (criticalityInfo.rating === 'Essential') criticalityFactor = 1.0;
-      else criticalityFactor = 0.5;
-
-      const holdingCostPerUnit = landedCostPerUnit * holdingCostRate;
-      const safetyStockCost = safetyStockQty * holdingCostPerUnit;
-
-      // Objective coefficient: W = Landed Unit Cost + (Holding Unit Cost / 2) + Risk Penalty
-      const riskFactor = (riskScore / 100) * riskWeight * criticalityFactor;
-      const W = landedCostPerUnit + (holdingCostPerUnit / 2) + landedCostPerUnit * riskFactor;
-
-      return {
-        supplierId: s.supplierId,
-        supplierName: s.supplierName,
-        country: originCountry,
-        region: originRegion,
-        moq: s.moq || 1,
-        leadTimeDays: ltDays,
-        reliability,
-        sigmaLT,
-        safetyStockQty,
-        safetyStockCost,
-        landedCostPerUnit,
-        holdingCostPerUnit,
-        riskScore,
-        criticalityFactor,
-        riskFactor,
-        W,
-        tariffPct,
-        insurancePct,
-        freightPct,
-        otherDutiesPct,
-        transportMode
-      };
-    });
-
-    // Solve via subset enumeration (MILP branch-and-bound equivalent)
-    const N = suppliers.length;
-    let bestSolution = null;
-    let bestCost = Infinity;
-    const numSubsets = Math.pow(2, N);
-
-    for (let mask = 1; mask < numSubsets; mask++) {
-      const activeIndices = [];
-      for (let i = 0; i < N; i++) {
-        if ((mask & (1 << i)) !== 0) {
-          activeIndices.push(i);
+    let isCurrent = true;
+    setIsOptimizing(true);
+    optimizeProcurement({
+      selectedProduct,
+      suppliers,
+      serviceLevelZ,
+      dailyUse,
+      destinationCountry,
+      dualSourcingEnabled,
+      maxSharePct,
+      totalDemand,
+      holdingCostRate,
+      riskWeight,
+      criticalityInfo
+    })
+      .then(res => {
+        if (isCurrent) {
+          setOptimizationResults(res);
+          setIsOptimizing(false);
         }
-      }
-
-      const activeSuppliers = activeIndices.map(idx => supplierCosts[idx]);
-      const numActive = activeSuppliers.length;
-
-      // Enforce dual sourcing if checked and possible
-      if (dualSourcingEnabled && N >= 2 && numActive < 2) {
-        continue;
-      }
-
-      let isLPFeasible = true;
-      const Q = {};
-      activeSuppliers.forEach(s => {
-        Q[s.supplierId] = s.moq; // Start at 1 * MOQ
+      })
+      .catch(err => {
+        console.error(err);
+        if (isCurrent) setIsOptimizing(false);
       });
 
-      let currentSum = activeSuppliers.reduce((sum, s) => sum + s.moq, 0);
-      if (currentSum < totalDemand) {
-        let remaining = totalDemand - currentSum;
-        const sortedActive = [...activeSuppliers].sort((a, b) => a.W - b.W);
-        
-        for (let s of sortedActive) {
-          const limit = (dualSourcingEnabled && numActive >= 2) ? Math.floor(maxSharePct * totalDemand) : totalDemand;
-          const maxAdd = limit - Q[s.supplierId];
-          if (maxAdd <= 0) continue;
-          
-          const step = s.moq;
-          const maxSteps = Math.floor(maxAdd / step);
-          if (maxSteps <= 0) continue;
-          
-          const stepsNeeded = Math.ceil(remaining / step);
-          const stepsToAdd = Math.min(maxSteps, stepsNeeded);
-          
-          const qtyToAdd = stepsToAdd * step;
-          Q[s.supplierId] += qtyToAdd;
-          remaining -= qtyToAdd;
-          currentSum += qtyToAdd;
-          if (remaining <= 0) break;
-        }
-        
-        // If there is still remaining demand due to strict diversification limits,
-        // relax the share limit and allocate to the cheapest supplier.
-        if (remaining > 0) {
-          for (let s of sortedActive) {
-            const qtyToAdd = Math.ceil(remaining / s.moq) * s.moq;
-            Q[s.supplierId] += qtyToAdd;
-            remaining -= qtyToAdd;
-            currentSum += qtyToAdd;
-            if (remaining <= 0) break;
-          }
-        }
-      }
-
-      if (isLPFeasible) {
-        let landedCostSum = 0;
-        let holdingCostSum = 0;
-        let riskPenaltySum = 0;
-        let ssCostSum = 0;
-
-        activeSuppliers.forEach(s => {
-          const qty = Q[s.supplierId];
-          landedCostSum += qty * s.landedCostPerUnit;
-          holdingCostSum += (qty / 2) * s.holdingCostPerUnit;
-          ssCostSum += s.safetyStockCost;
-          riskPenaltySum += qty * s.landedCostPerUnit * s.riskFactor;
-        });
-
-        const totalCost = landedCostSum + holdingCostSum + ssCostSum + riskPenaltySum;
-        if (totalCost < bestCost) {
-          bestCost = totalCost;
-          bestSolution = {
-            activeMask: mask,
-            allocations: Q,
-            landedCost: landedCostSum,
-            holdingCost: holdingCostSum,
-            safetyStockCost: ssCostSum,
-            riskPenalty: riskPenaltySum,
-            totalCost: totalCost,
-            supplierDetails: activeSuppliers.map(s => ({
-              ...s,
-              qty: Q[s.supplierId],
-              sharePct: Math.round((Q[s.supplierId] / currentSum) * 100)
-            }))
-          };
-        }
-      }
-    }
-
-    // FALLBACK IF INFEASIBLE: Relax Constraints
-    let isRelaxed = false;
-    let relaxationMsg = '';
-    if (!bestSolution) {
-      isRelaxed = true;
-      // Step 1: Relax dual sourcing share limit first
-      const sortedAll = [...supplierCosts].sort((a, b) => a.W - b.W);
-      const cheapest = sortedAll[0];
-      
-      const cheapestQty = Math.ceil(totalDemand / cheapest.moq) * cheapest.moq;
-      const allocations = { [cheapest.supplierId]: cheapestQty };
-      const qty = cheapestQty;
-      const landedCostSum = qty * cheapest.landedCostPerUnit;
-      const holdingCostSum = (qty / 2) * cheapest.holdingCostPerUnit;
-      const ssCostSum = cheapest.safetyStockCost;
-      const riskPenaltySum = qty * cheapest.landedCostPerUnit * cheapest.riskFactor;
-      const totalCost = landedCostSum + holdingCostSum + ssCostSum + riskPenaltySum;
-
-      bestSolution = {
-        activeMask: 1,
-        allocations,
-        landedCost: landedCostSum,
-        holdingCost: holdingCostSum,
-        safetyStockCost: ssCostSum,
-        riskPenalty: riskPenaltySum,
-        totalCost,
-        supplierDetails: [{
-          ...cheapest,
-          qty,
-          sharePct: 100
-        }]
-      };
-      relaxationMsg = 'Constraints relaxed: Single sourcing allowed to satisfy MOQ constraints.';
-    }
-
-    return {
-      feasible: true,
-      solution: bestSolution,
-      relaxed: isRelaxed,
-      relaxationMsg,
-      supplierCosts
+    return () => {
+      isCurrent = false;
     };
   }, [selectedProduct, suppliers, totalDemand, serviceLevelZ, holdingCostRate, riskWeight, dualSourcingEnabled, maxSharePct, destinationCountry, dailyUse, criticalityInfo]);
 

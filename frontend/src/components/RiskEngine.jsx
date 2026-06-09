@@ -1,9 +1,39 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Layers, ShieldAlert, DollarSign, Activity, AlertTriangle, Filter, CheckCircle2, Calculator, HelpCircle } from 'lucide-react';
-import { getInventoryRiskRecords, getRiskSummary } from '../engine/inventoryAnalysis.js';
-import { DEFAULT_WEIGHTS_A, DEFAULT_WEIGHTS_B, DEFAULT_THRESHOLDS, clamp } from '../engine/riskScoringModel.js';
+import { fetchRiskRecords, fetchRiskDetails } from '../services/dataService.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
-import { getSuppliersForProduct } from '../data/supplierMaster.js';
+
+const DEFAULT_WEIGHTS_A = {
+  p1_invLevel: 0.08,
+  p2_daysOfSupply: 0.15,
+  p3_safetyStock: 0.12,
+  p4_leadTime: 0.15,
+  p5_supplierDep: 0.18,
+  p6_criticality: 0.12,
+  p7_tariffNews: 0.10,
+  p8_corridorNews: 0.10,
+};
+
+const DEFAULT_WEIGHTS_B = {
+  p1_invLevel: 0.09,
+  p2_daysOfSupply: 0.17,
+  p3_safetyStock: 0.14,
+  p4_leadTime: 0.17,
+  p5_supplierDep: 0.20,
+  p7_tariffNews: 0.115,
+  p8_corridorNews: 0.115,
+};
+
+const DEFAULT_THRESHOLDS = {
+  p1_safe: 1.2,
+  p1_crit: 0.5,
+  p4_safe: 15,
+  p4_crit: 45,
+  p5_otifTarget: 0.98,
+  p5_otifFloor: 0.80,
+  p2_safeMultiplier: 2.0,
+  p2_critMultiplier: 1.0,
+};
 
 
 const CustomizedTreemapContent = (props) => {
@@ -251,250 +281,6 @@ function computeTreemapLayout(items, x, y, width, height) {
   }
 }
 
-// Recalculates risk scores step-by-step using local modal overrides and product info to show exact math
-function getCalculationDetails(product, localCrit, localTar, localCorr, config, activeModel) {
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...config.thresholds };
-  const weightsA = { ...DEFAULT_WEIGHTS_A, ...config.weightsA };
-  const weightsB = { ...DEFAULT_WEIGHTS_B, ...config.weightsB };
-
-  // Daily Consumption
-  const dailyUse = product.daysOfCoverage > 0
-    ? product.inHandInventory / product.daysOfCoverage
-    : 1;
-
-  // Average Lead time
-  const suppliers = product.suppliers || [];
-  let ltAvg = 20;
-  let ltAvgFormula = '';
-  let ltAvgCalculation = '';
-  if (suppliers.length > 0) {
-    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
-    if (totalPct > 0) {
-      ltAvg = suppliers.reduce((sum, s) => sum + ((s.supplyPct || 0) / 100) * (s.leadTimeDays || 0), 0);
-      ltAvgFormula = 'Sum(Supply% * LT_days)';
-      ltAvgCalculation = suppliers.map(s => `(${s.supplyPct}% * ${s.leadTimeDays}d)`).join(' + ') + ` = ${ltAvg.toFixed(2)} days`;
-    } else {
-      ltAvg = suppliers.reduce((sum, s) => sum + (s.leadTimeDays || 0), 0) / suppliers.length;
-      ltAvgFormula = 'Sum(LT_days) / N';
-      ltAvgCalculation = `(${suppliers.map(s => `${s.leadTimeDays}d`).join(' + ')}) / ${suppliers.length} = ${ltAvg.toFixed(2)} days`;
-    }
-  } else {
-    ltAvgFormula = 'Fallback Default';
-    ltAvgCalculation = `Default value = 20.00 days (no suppliers available)`;
-  }
-
-  // Sigma LT
-  let sigmaLT = 5;
-  let sigmaLTFormula = '';
-  let sigmaLTCalculation = '';
-  if (suppliers.length > 0) {
-    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
-    const supplierSigmas = suppliers.map(s => {
-      const reliability = s.reliability || 90;
-      const sSigma = s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5);
-      return { s, reliability, sSigma };
-    });
-    
-    if (totalPct > 0) {
-      sigmaLT = supplierSigmas.reduce((sum, item) => sum + ((item.s.supplyPct || 0) / 100) * item.sSigma, 0);
-      sigmaLTFormula = 'Sum(Supply% * sSigma)';
-      sigmaLTCalculation = supplierSigmas.map(item => `(${item.s.supplyPct}% * [${item.s.leadTimeDays}d * (0.1 + (1 - ${item.reliability}/100) * 0.5)])`).join('\n+ ') + `\n= ${sigmaLT.toFixed(2)} days`;
-    } else {
-      sigmaLT = supplierSigmas.reduce((sum, item) => sum + item.sSigma, 0) / suppliers.length;
-      sigmaLTFormula = 'Sum(sSigma) / N';
-      sigmaLTCalculation = `(${supplierSigmas.map(item => `[${item.s.leadTimeDays}d * (0.1 + (1 - ${item.reliability}/100) * 0.5)]`).join(' + ')}) / ${suppliers.length} = ${sigmaLT.toFixed(2)} days`;
-    }
-  } else {
-    sigmaLTFormula = 'Fallback Default';
-    sigmaLTCalculation = `Default value = 5.00 days (no suppliers available)`;
-  }
-
-  // ROP
-  const rop = (dailyUse * ltAvg) + (product.safetyStock || 0);
-  const ropFormula = '(DailyUse * LT_avg) + SafetyStock';
-  const ropCalculation = `(${dailyUse.toFixed(2)} * ${ltAvg.toFixed(2)}) + ${product.safetyStock || 0} = ${rop.toFixed(2)} units`;
-
-  // k Ratio
-  const k = rop > 0 ? product.inHandInventory / rop : 1.2;
-  const kFormula = 'IL / ROP';
-  const kCalculation = `${product.inHandInventory} / ${rop.toFixed(2)} = ${k.toFixed(4)}`;
-
-  // --- Subscores ---
-  // P1
-  const r1 = clamp((thresholds.p1_safe - k) / (thresholds.p1_safe - thresholds.p1_crit));
-  const r1Formula = 'clamp((Safe_p1 - k) / (Safe_p1 - Crit_p1))';
-  const r1Calculation = `clamp((${thresholds.p1_safe} - ${k.toFixed(2)}) / (${thresholds.p1_safe} - ${thresholds.p1_crit})) = clamp(${(thresholds.p1_safe - k).toFixed(2)} / ${(thresholds.p1_safe - thresholds.p1_crit).toFixed(2)}) = ${r1.toFixed(2)}`;
-
-  // P2
-  const dosSafe = thresholds.p2_safeMultiplier * ltAvg;
-  const dosCrit = thresholds.p2_critMultiplier * ltAvg;
-  const doS = product.daysOfCoverage || 0;
-  const r2 = clamp((dosSafe - doS) / (dosSafe - dosCrit));
-  const r2Formula = 'clamp((dosSafe - DoS) / (dosSafe - dosCrit))';
-  const r2Calculation = `dosSafe = ${thresholds.p2_safeMultiplier} * ${ltAvg.toFixed(1)} = ${dosSafe.toFixed(1)}d, dosCrit = ${thresholds.p2_critMultiplier} * ${ltAvg.toFixed(1)} = ${dosCrit.toFixed(1)}d\nclamp((${dosSafe.toFixed(1)} - ${doS}) / (${dosSafe.toFixed(1)} - ${dosCrit.toFixed(1)})) = clamp(${(dosSafe - doS).toFixed(1)} / ${(dosSafe - dosCrit).toFixed(1)}) = ${r2.toFixed(2)}`;
-
-  // P3
-  const ssTarget = Math.max((product.safetyStock || 0) * 1.5, 5);
-  const ssNow = product.safetyStock || 0;
-  const r3 = clamp((ssTarget - ssNow) / ssTarget);
-  const r3Formula = 'clamp((ssTarget - ssNow) / ssTarget)';
-  const r3Calculation = `ssTarget = max(${ssNow} * 1.5, 5) = ${ssTarget.toFixed(1)}\nclamp((${ssTarget.toFixed(1)} - ${ssNow}) / ${ssTarget.toFixed(1)}) = ${r3.toFixed(2)}`;
-
-  // P4
-  const ltEff = ltAvg + 1.65 * sigmaLT;
-  const r4 = clamp((ltEff - thresholds.p4_safe) / (thresholds.p4_crit - thresholds.p4_safe));
-  const r4Formula = 'clamp((ltEff - Safe_p4) / (Crit_p4 - Safe_p4))';
-  const r4Calculation = `ltEff = ${ltAvg.toFixed(1)} + (1.65 * ${sigmaLT.toFixed(1)}) = ${ltEff.toFixed(1)}d\nclamp((${ltEff.toFixed(1)} - ${thresholds.p4_safe}) / (${thresholds.p4_crit} - ${thresholds.p4_safe})) = clamp(${(ltEff - thresholds.p4_safe).toFixed(1)} / ${(thresholds.p4_crit - thresholds.p4_safe).toFixed(1)}) = ${r4.toFixed(2)}`;
-
-  // P5 concentration
-  let rConc = 1.0;
-  let rConcFormula = '';
-  let rConcCalculation = '';
-  if (suppliers.length > 1) {
-    const hhi = suppliers.reduce((sum, s) => sum + Math.pow((s.supplyPct || 0) / 100, 2), 0);
-    const n = suppliers.length;
-    rConc = (hhi - 1 / n) / (1 - 1 / n);
-    rConcFormula = '(HHI - 1/N) / (1 - 1/N)';
-    rConcCalculation = `HHI = ${suppliers.map(s => `(${s.supplyPct}%/100)^2`).join(' + ')} = ${hhi.toFixed(3)}\n(${hhi.toFixed(3)} - 1/${n}) / (1 - 1/${n}) = ${rConc.toFixed(2)}`;
-  } else {
-    rConcFormula = 'Fallback Single Supplier';
-    rConcCalculation = `Only ${suppliers.length} supplier(s), HHI concentration score = 1.00`;
-  }
-
-  // P5 OTIF reliability
-  let otifAvg = 0.90;
-  let otifAvgFormula = '';
-  let otifAvgCalculation = '';
-  if (suppliers.length > 0) {
-    const totalPct = suppliers.reduce((sum, s) => sum + (s.supplyPct || 0), 0);
-    if (totalPct > 0) {
-      otifAvg = suppliers.reduce((sum, s) => sum + ((s.supplyPct || 0) / 100) * ((s.reliability || 90) / 100), 0);
-      otifAvgFormula = 'Sum(Supply% * Reliability%)';
-      otifAvgCalculation = suppliers.map(s => `(${s.supplyPct}% * ${s.reliability}%)`).join(' + ') + ` = ${(otifAvg*100).toFixed(1)}%`;
-    } else {
-      otifAvg = suppliers.reduce((sum, s) => sum + (s.reliability || 90), 0) / suppliers.length / 100;
-      otifAvgFormula = 'Sum(Reliability%) / N';
-      otifAvgCalculation = `(${suppliers.map(s => `${s.reliability}%`).join(' + ')}) / ${suppliers.length} = ${(otifAvg*100).toFixed(1)}%`;
-    }
-  } else {
-    otifAvgFormula = 'Fallback Default';
-    otifAvgCalculation = `Default value = 90.0% (no suppliers available)`;
-  }
-  const rOtif = clamp((thresholds.p5_otifTarget - otifAvg) / (thresholds.p5_otifTarget - thresholds.p5_otifFloor));
-  const rOtifFormula = 'clamp((otifTarget - otifAvg) / (otifTarget - otifFloor))';
-  const rOtifCalculation = `clamp((${thresholds.p5_otifTarget} - ${otifAvg.toFixed(3)}) / (${thresholds.p5_otifTarget} - ${thresholds.p5_otifFloor})) = ${rOtif.toFixed(2)}`;
-
-  const r5 = 0.5 * rConc + 0.5 * rOtif;
-  const r5Formula = '0.5 * Concentration + 0.5 * OTIF';
-  const r5Calculation = `0.5 * ${rConc.toFixed(2)} + 0.5 * ${rOtif.toFixed(2)} = ${r5.toFixed(2)}`;
-
-  // P6 Criticality
-  const r6 = localCrit;
-  const r6Formula = 'Category Base Score (or Custom Override)';
-  const r6Calculation = `Criticality Rating = ${r6.toFixed(2)}`;
-
-  // P7 Tariff
-  const r7 = localTar.severity * localTar.probability * localTar.relevance;
-  const r7Formula = 'Severity * Probability * Relevance';
-  const r7Calculation = `${localTar.severity.toFixed(1)} * ${localTar.probability.toFixed(1)} * ${localTar.relevance.toFixed(1)} = ${r7.toFixed(2)}`;
-
-  // P8 Corridor Threat
-  const coreThreat = 0.5 * localCorr.severity + 0.3 * localCorr.probability + 0.2 * localCorr.persistence;
-  const r8 = localCorr.relevance * coreThreat;
-  const r8Formula = 'Relevance * (0.5 * Sev + 0.3 * Prob + 0.2 * Pers)';
-  const r8Calculation = `CoreThreat = (0.5 * ${localCorr.severity.toFixed(1)} + 0.3 * ${localCorr.probability.toFixed(1)} + 0.2 * ${localCorr.persistence.toFixed(1)}) = ${coreThreat.toFixed(2)}\n${localCorr.relevance.toFixed(1)} * ${coreThreat.toFixed(2)} = ${r8.toFixed(2)}`;
-
-  // --- Model A Sum ---
-  const weightedSumParts = [
-    { name: 'P1: Inventory Level', score: r1, weight: weightsA.p1_invLevel },
-    { name: 'P2: Days of Supply', score: r2, weight: weightsA.p2_daysOfSupply },
-    { name: 'P3: Safety Stock Shortfall', score: r3, weight: weightsA.p3_safetyStock },
-    { name: 'P4: Effective Lead Time', score: r4, weight: weightsA.p4_leadTime },
-    { name: 'P5: Supplier Dependence', score: r5, weight: weightsA.p5_supplierDep },
-    { name: 'P6: Inventory Criticality', score: r6, weight: weightsA.p6_criticality },
-    { name: 'P7: Tariff Changes', score: r7, weight: weightsA.p7_tariffNews },
-    { name: 'P8: Corridor Threats', score: r8, weight: weightsA.p8_corridorNews },
-  ];
-  const modelASumProd = weightedSumParts.reduce((sum, part) => sum + part.score * part.weight, 0);
-  const scoreA = 100 * modelASumProd;
-
-  // --- Model B Likelihood x Impact ---
-  const likelihoodParts = [
-    { name: 'P1: Inventory Level', score: r1, weight: weightsB.p1_invLevel },
-    { name: 'P2: Days of Supply', score: r2, weight: weightsB.p2_daysOfSupply },
-    { name: 'P3: Safety Stock Shortfall', score: r3, weight: weightsB.p3_safetyStock },
-    { name: 'P4: Effective Lead Time', score: r4, weight: weightsB.p4_leadTime },
-    { name: 'P5: Supplier Dependence', score: r5, weight: weightsB.p5_supplierDep },
-    { name: 'P7: Tariff Changes', score: r7, weight: weightsB.p7_tariffNews },
-    { name: 'P8: Corridor Threats', score: r8, weight: weightsB.p8_corridorNews },
-  ];
-  const likelihood = likelihoodParts.reduce((sum, part) => sum + part.score * part.weight, 0);
-  const impact = 0.4 + 0.6 * r6;
-  const scoreB = 100 * likelihood * impact;
-
-  // Floor Override
-  let scoreFinal = scoreB;
-  let hasOverride = false;
-  const maxOverrideVal = Math.max(r2, r7, r8);
-  if (maxOverrideVal >= 0.90) {
-    scoreFinal = Math.max(scoreB, 70);
-    hasOverride = true;
-  }
-
-  return {
-    inputs: {
-      inHandInventory: product.inHandInventory,
-      daysOfCoverage: product.daysOfCoverage,
-      safetyStock: product.safetyStock || 0,
-      category: product.category,
-      suppliers,
-    },
-    thresholds,
-    weightsA,
-    weightsB,
-    intermediates: {
-      dailyUse,
-      ltAvg,
-      ltAvgFormula,
-      ltAvgCalculation,
-      sigmaLT,
-      sigmaLTFormula,
-      sigmaLTCalculation,
-      ltEff,
-      rop,
-      ropFormula,
-      ropCalculation,
-      k,
-      kFormula,
-      kCalculation,
-    },
-    subScores: {
-      r1: { score: r1, formula: r1Formula, calculation: r1Calculation },
-      r2: { score: r2, formula: r2Formula, calculation: r2Calculation },
-      r3: { score: r3, formula: r3Formula, calculation: r3Calculation },
-      r4: { score: r4, formula: r4Formula, calculation: r4Calculation },
-      r5: { score: r5, formula: r5Formula, calculation: r5Calculation, parts: { rConc, rConcFormula, rConcCalculation, rOtif, rOtifFormula, rOtifCalculation, otifAvg, otifAvgFormula, otifAvgCalculation } },
-      r6: { score: r6, formula: r6Formula, calculation: r6Calculation },
-      r7: { score: r7, formula: r7Formula, calculation: r7Calculation },
-      r8: { score: r8, formula: r8Formula, calculation: r8Calculation },
-    },
-    modelA: {
-      parts: weightedSumParts,
-      sumProd: modelASumProd,
-      score: scoreA,
-    },
-    modelB: {
-      parts: likelihoodParts,
-      likelihood,
-      impact,
-      score: scoreB,
-      hasOverride,
-      maxOverrideVal,
-      scoreFinal,
-    }
-  };
-}
-
 export default function RiskEngine({ currency, convertAmount, products, suppliers }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCell, setSelectedCell] = useState(null); // format: { sde: 'S', ved: 'V' }
@@ -506,6 +292,14 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
   const [activeModel, setActiveModel] = useState('ModelB'); // 'ModelB' (Likelihood * Impact) or 'ModelA' (Weighted Sum)
   const [selectedProductForModal, setSelectedProductForModal] = useState(null);
   const [showCalculationDetails, setShowCalculationDetails] = useState(false);
+
+  // States for backend custom risk calculations
+  const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [calcDetails, setCalcDetails] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   
   // Custom multi-criteria Option B scoring rubric states
   const [optionBAnswers, setOptionBAnswers] = useState({}); // { erpCode: [4, 4, 3, 4] }
@@ -542,8 +336,26 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
     return () => resizeObserver.disconnect();
   }, []);
 
-  const records = useMemo(() => getInventoryRiskRecords(config), [config, products, suppliers]);
-  const summary = useMemo(() => getRiskSummary(config), [config, products, suppliers]);
+  // Fetch custom risk reports from backend on config changes
+  useEffect(() => {
+    let active = true;
+    const loadRiskData = async () => {
+      try {
+        setLoading(true);
+        const data = await fetchRiskRecords(config);
+        if (active) {
+          setRecords(data.records);
+          setSummary(data.summary);
+        }
+      } catch (err) {
+        console.error('Failed to fetch custom risk reports:', err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    loadRiskData();
+    return () => { active = false; };
+  }, [config, products, suppliers]);
 
   // Format currencies helper
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);
@@ -891,6 +703,38 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
     const corridor = config.corridorOverride[p.erpCode] || p.rawMetrics?.corridorDetails || { severity: 0.4, probability: 0.5, persistence: 0.5, relevance: 0.1 };
     setLocalCorridor(corridor);
   }, [selectedProductForModal, config.criticalityOverride, config.tariffOverride, config.corridorOverride, optionBAnswers]);
+
+  // Fetch detailed step-by-step mathematical explanation when sub-modal is open
+  useEffect(() => {
+    if (showCalculationDetails && selectedProductForModal && records.length > 0) {
+      let active = true;
+      const getDetails = async () => {
+        try {
+          setLoadingDetails(true);
+          const p = records.find(r => r.erpCode === selectedProductForModal.erpCode) || selectedProductForModal;
+          const details = await fetchRiskDetails({
+            product: p,
+            localCrit: localCriticality,
+            localTar: localTariff,
+            localCorr: localCorridor,
+            config,
+            activeModel
+          });
+          if (active) {
+            setCalcDetails(details);
+          }
+        } catch (err) {
+          console.error('Failed to get detailed calculation derivation:', err);
+        } finally {
+          if (active) setLoadingDetails(false);
+        }
+      };
+      getDetails();
+      return () => { active = false; };
+    } else {
+      setCalcDetails(null);
+    }
+  }, [showCalculationDetails, selectedProductForModal, localCriticality, localTariff, localCorridor, config, activeModel, records]);
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -1636,8 +1480,6 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
       {/* --- Detailed Math Explanation Sub-Modal --- */}
       {showCalculationDetails && selectedProductForModal && (() => {
         const p = records.find(r => r.erpCode === selectedProductForModal.erpCode) || selectedProductForModal;
-        const calc = getCalculationDetails(p, localCriticality, localTariff, localCorridor, config, activeModel);
-        const activeScore = activeModel === 'ModelA' ? calc.modelA.score : calc.modelB.scoreFinal;
         const isModelB = activeModel === 'ModelB';
 
         return (
@@ -1677,6 +1519,15 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
               </div>
 
               {/* Body */}
+              {(!calcDetails || loadingDetails) ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', color: 'var(--text-secondary)', flex: 1 }}>
+                  <div className="animate-spin" style={{ width: '40px', height: '40px', border: '4px solid #1e293b', borderTop: '4px solid var(--tm-red, #e11d48)', borderRadius: '50%', marginBottom: '16px' }} />
+                  <div>Computing mathematical derivation sheet on backend...</div>
+                </div>
+              ) : (() => {
+                const calc = calcDetails;
+                const activeScore = activeModel === 'ModelA' ? calc.modelA.score : calc.modelB.scoreFinal;
+                return (
               <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '24px', flex: 1, fontFamily: "'Poppins', sans-serif" }}>
                 
                 {/* Step 1: Base Inputs */}
@@ -2039,8 +1890,9 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
                   </div>
                 </div>
 
-              </div>
-
+                  </div>
+                );
+              })()}
               {/* Footer */}
               <div style={{
                 display: 'flex', justifyContent: 'flex-end',

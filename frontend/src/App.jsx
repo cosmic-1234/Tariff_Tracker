@@ -11,7 +11,7 @@ import AutonomousProcurement from './components/AutonomousProcurement.jsx';
 import { fetchExchangeRates } from './services/exchangeRateService.js';
 import { fetchLiveCountries } from './services/countryService.js';
 import { countries } from './data/masterData.js';
-import { fetchProducts, fetchSuppliers } from './services/dataService.js';
+import { fetchProducts, fetchSuppliers, fetchRiskRecords } from './services/dataService.js';
 import { productMaster } from './data/productMaster.js';
 import { supplierMaster } from './data/supplierMaster.js';
 
@@ -28,6 +28,8 @@ function App() {
 
   const [products, setProducts] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [riskRecords, setRiskRecords] = useState([]);
+  const [riskSummary, setRiskSummary] = useState(null);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
@@ -78,6 +80,11 @@ function App() {
         
         setProducts(fetchedProducts);
         setSuppliers(fetchedSuppliers);
+
+        // Fetch risk analysis from backend calculations service
+        const riskData = await fetchRiskRecords();
+        setRiskRecords(riskData.records);
+        setRiskSummary(riskData.summary);
         
         if (fetchedProducts.length > 0 && !selectedProductForCalc) {
           setSelectedProductForCalc(fetchedProducts[0]);
@@ -116,7 +123,7 @@ function App() {
       case 'dashboard':
         return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'procurement':
-        return <AutonomousProcurement currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
+        return <AutonomousProcurement currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} riskRecords={riskRecords} />;
       case 'calculator':
         return (
           <TariffCalculator
@@ -131,7 +138,7 @@ function App() {
       case 'scoring':
         return <CriticalityScoring currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'classification':
-        return <InventoryClassification currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
+        return <InventoryClassification currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} riskRecords={riskRecords} riskSummary={riskSummary} />;
       case 'riskengine':
         return <RiskEngine currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'products':
