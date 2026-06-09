@@ -743,22 +743,22 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
       <div className="kpi-grid stagger-children">
         <div className="kpi-card animate-scale-in">
           <div className="kpi-label">Total Classified Value</div>
-          <div className="kpi-value">{fmt(summary.totalValue)}</div>
+          <div className="kpi-value">{summary ? fmt(summary.totalValue) : '—'}</div>
         </div>
         <div className="kpi-card animate-scale-in">
           <div className="kpi-label">Critical 0–100 Cash Risk</div>
           <div className="kpi-value" style={{ color: 'var(--danger)' }}>
-            {fmt(summary.riskSegments.Critical.value)}
+            {summary ? fmt(summary.riskSegments.Critical.value) : '—'}
           </div>
         </div>
         <div className="kpi-card animate-scale-in">
           <div className="kpi-label">Avg Sourcing Risk Rating</div>
-          <div className="kpi-value">{summary.avgRiskScore.toFixed(1)} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>/ 100</span></div>
+          <div className="kpi-value">{summary ? summary.avgRiskScore.toFixed(1) : '—'} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>/ 100</span></div>
         </div>
         <div className="kpi-card animate-scale-in">
           <div className="kpi-label">Critical Sourcing Components</div>
           <div className="kpi-value" style={{ color: 'var(--danger)' }}>
-            {summary.riskSegments.Critical.count} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>items</span>
+            {summary ? summary.riskSegments.Critical.count : '—'} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>items</span>
           </div>
         </div>
       </div>
@@ -1011,7 +1011,7 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
                     <td style={{ fontFamily: 'monospace' }}>{p.hsCode}</td>
                     <td><span className="badge neutral">{p.category}</span></td>
                     <td style={{ fontWeight: 500 }}>{p.description}</td>
-                    <td style={{ fontWeight: 600 }}>{getSuppliersForProduct(p.erpCode).length}</td>
+                    <td style={{ fontWeight: 600 }}>{p.suppliers?.length || 0}</td>
                     <td>{p.inHandInventory}</td>
                     
                     {/* Legacy SDE*VED Cell */}
@@ -1530,6 +1530,32 @@ export default function RiskEngine({ currency, convertAmount, products, supplier
                 return (
               <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '24px', flex: 1, fontFamily: "'Poppins', sans-serif" }}>
                 
+                {/* AI Executive Analysis Container */}
+                {calc.aiAnalysis && (
+                  <div style={{
+                    background: 'rgba(227, 24, 55, 0.04)',
+                    borderLeft: '4px solid #E31837',
+                    borderRight: '1px solid rgba(227, 24, 55, 0.15)',
+                    borderTop: '1px solid rgba(227, 24, 55, 0.15)',
+                    borderBottom: '1px solid rgba(227, 24, 55, 0.15)',
+                    borderRadius: '4px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '16px' }}>🤖</span>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#E31837', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Amazon Bedrock AI Risk Analysis
+                      </h4>
+                    </div>
+                    <p style={{ fontSize: '12px', color: 'var(--text-primary)', lineHeight: '1.6', margin: 0, whiteSpace: 'pre-line' }}>
+                      {calc.aiAnalysis}
+                    </p>
+                  </div>
+                )}
+
                 {/* Step 1: Base Inputs */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-bright)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', margin: 0 }}>

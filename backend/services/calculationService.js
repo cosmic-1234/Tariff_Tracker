@@ -108,7 +108,7 @@ function getVedClassification(category, daysOfCoverage) {
   return { score, classification };
 }
 
-function calculateRiskScore(product, suppliers, config = {}) {
+function calculateRiskScore(product, suppliers, config = {}, lpiMap = {}, newsMap = {}) {
   const thresholds = { ...DEFAULT_THRESHOLDS, ...config.thresholds };
   const weightsA = { ...DEFAULT_WEIGHTS_A, ...config.weightsA };
   const weightsB = { ...DEFAULT_WEIGHTS_B, ...config.weightsB };
@@ -133,13 +133,17 @@ function calculateRiskScore(product, suppliers, config = {}) {
     if (totalPct > 0) {
       sigmaLT = suppliers.reduce((sum, s) => {
         const reliability = s.reliability || 90;
-        const sSigma = s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5);
+        const lpi = lpiMap[s.countryCode] || 3.5;
+        const lpiModifier = lpi < 3.4 ? 1.3 : lpi > 3.9 ? 0.8 : 1.0;
+        const sSigma = s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5) * lpiModifier;
         return sum + ((s.supplyPct || 0) / 100) * sSigma;
       }, 0);
     } else {
       sigmaLT = suppliers.reduce((sum, s) => {
         const reliability = s.reliability || 90;
-        return sum + s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5);
+        const lpi = lpiMap[s.countryCode] || 3.5;
+        const lpiModifier = lpi < 3.4 ? 1.3 : lpi > 3.9 ? 0.8 : 1.0;
+        return sum + s.leadTimeDays * (0.1 + (1 - reliability / 100) * 0.5) * lpiModifier;
       }, 0) / suppliers.length;
     }
   }
@@ -208,6 +212,17 @@ function calculateRiskScore(product, suppliers, config = {}) {
     tariffProbability = 0.8;
   } else if (suppliers && suppliers.some(s => s.country === 'Germany' || s.country === 'Japan')) {
     tariffRelevance = 0.5;
+  }
+  
+  // Adjust tariff news threat based on GDELT headlines if present
+  if (suppliers && suppliers.length > 0) {
+    suppliers.forEach(s => {
+      const gThreat = newsMap[s.countryCode];
+      if (gThreat !== undefined) {
+        tariffProbability = Math.min(1.0, tariffProbability + gThreat * 0.2);
+        tariffRelevance = Math.min(1.0, tariffRelevance + gThreat * 0.3);
+      }
+    });
   }
   
   const customTariff = config.tariffOverride && config.tariffOverride[product.erpCode]
@@ -297,7 +312,7 @@ function calculateRiskScore(product, suppliers, config = {}) {
   };
 }
 
-function getInventoryRiskRecords(products, suppliers, config = {}) {
+function getInventoryRiskRecords(products, suppliers, config = {}, lpiMap = {}, newsMap = {}) {
   return products.map(product => {
     const productSuppliers = suppliers.filter(s => s.productErpCode === product.erpCode);
     const maxLeadTime = productSuppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
@@ -311,7 +326,7 @@ function getInventoryRiskRecords(products, suppliers, config = {}) {
     if (riskValue >= 15) riskLevel = 'Critical';
     else if (riskValue >= 6) riskLevel = 'Medium';
 
-    const advancedRisk = calculateRiskScore(product, productSuppliers, config);
+    const advancedRisk = calculateRiskScore(product, productSuppliers, config, lpiMap, newsMap);
 
     return {
       ...product,
@@ -336,8 +351,8 @@ function getInventoryRiskRecords(products, suppliers, config = {}) {
   });
 }
 
-function getRiskSummary(products, suppliers, config = {}) {
-  const records = getInventoryRiskRecords(products, suppliers, config);
+function getRiskSummary(products, suppliers, config = {}, lpiMap = {}, newsMap = {}) {
+  const records = getInventoryRiskRecords(products, suppliers, config, lpiMap, newsMap);
   const totalValue = records.reduce((sum, r) => sum + r.inventoryValue, 0);
 
   const riskSegments = {

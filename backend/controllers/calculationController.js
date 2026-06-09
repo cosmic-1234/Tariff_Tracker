@@ -1,6 +1,7 @@
 const Product = require('../models/Product');
 const Supplier = require('../models/Supplier');
 const calculationService = require('../services/calculationService');
+const apiService = require('../services/apiService');
 
 /**
  * Calculates SDE/VED risk records and summaries for all inventory items
@@ -13,8 +14,40 @@ exports.calculateRiskRecords = async (req, res) => {
     const products = await Product.find().lean();
     const suppliers = await Supplier.find().lean();
     
-    const records = calculationService.getInventoryRiskRecords(products, suppliers, config);
-    const summary = calculationService.getRiskSummary(products, suppliers, config);
+    // Extract unique countries
+    const uniqueCountries = [];
+    const seen = new Set();
+    suppliers.forEach(s => {
+      if (s.countryCode && s.country && !seen.has(s.countryCode)) {
+        seen.add(s.countryCode);
+        uniqueCountries.push({ code: s.countryCode, name: s.country });
+      }
+    });
+
+    const lpiMap = {};
+    const newsMap = {};
+
+    // Fetch LPI and News threat index in parallel
+    await Promise.all(uniqueCountries.map(async (c) => {
+      try {
+        const [lpiVal, news] = await Promise.all([
+          apiService.fetchWorldBankLPI(c.code),
+          apiService.fetchGDELTNews(c.name)
+        ]);
+        lpiMap[c.code] = lpiVal;
+        
+        // Scale threat index to 0-1 range based on news count (up to 5 articles query)
+        const threatFactor = Array.isArray(news) ? (news.length / 5.0) : 0;
+        newsMap[c.code] = threatFactor;
+      } catch (err) {
+        console.error(`Failed to fetch live data for ${c.name}:`, err);
+        lpiMap[c.code] = 3.5;
+        newsMap[c.code] = 0;
+      }
+    }));
+
+    const records = calculationService.getInventoryRiskRecords(products, suppliers, config, lpiMap, newsMap);
+    const summary = calculationService.getRiskSummary(products, suppliers, config, lpiMap, newsMap);
     
     res.json({
       success: true,
@@ -171,6 +204,33 @@ exports.getRiskDetails = async (req, res) => {
       config || {},
       activeModel || 'ModelB'
     );
+
+    // Fetch primary supplier LPI and News, and call Bedrock for AI analysis
+    const suppliers = product.suppliers || [];
+    const primarySupplier = suppliers.reduce((max, s) => (s.supplyPct || 0) > (max.supplyPct || 0) ? s : max, suppliers[0] || null);
+
+    let lpiValue = 3.0;
+    let newsArticles = [];
+    if (primarySupplier) {
+      try {
+        const [fetchedLpi, fetchedNews] = await Promise.all([
+          apiService.fetchWorldBankLPI(primarySupplier.countryCode),
+          apiService.fetchGDELTNews(primarySupplier.country)
+        ]);
+        lpiValue = fetchedLpi;
+        newsArticles = fetchedNews;
+      } catch (err) {
+        console.warn('Failed to fetch supplier details for AI analysis:', err.message);
+      }
+    }
+
+    try {
+      const aiAnalysis = await apiService.analyzeRiskWithAI(product, suppliers, lpiValue, newsArticles);
+      calcDetails.aiAnalysis = aiAnalysis;
+    } catch (err) {
+      console.error('Bedrock AI Risk Analysis invocation failed:', err);
+      calcDetails.aiAnalysis = 'Error: Unable to run AI Risk Analysis at this time.';
+    }
 
     res.json({
       success: true,
