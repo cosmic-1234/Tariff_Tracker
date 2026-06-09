@@ -3,8 +3,17 @@ import { Globe, Ship, Plane, MapPin, DollarSign } from 'lucide-react';
 import { countries, regions, majorCorridors, insuranceCostMatrix, shippingCostMatrix, tariffRateTable, getCountryByCode } from '../data/masterData.js';
 import { supplierMaster, getAllSuppliers } from '../data/supplierMaster.js';
 
-export default function MasterDataView() {
+export default function MasterDataView({ suppliers = supplierMaster }) {
   const [activeTab, setActiveTab] = useState('countries');
+
+  const getLocalUniqueSuppliers = () => {
+    const seen = new Set();
+    return suppliers.filter(s => {
+      if (seen.has(s.supplierId)) return false;
+      seen.add(s.supplierId);
+      return true;
+    });
+  };
   const [selectedDestCountry, setSelectedDestCountry] = useState('India');
 
   const tariffsHsRates = tariffRateTable[selectedDestCountry] || {};
@@ -298,7 +307,7 @@ export default function MasterDataView() {
                 </tr>
               </thead>
               <tbody>
-                {supplierMaster.map((s, idx) => (
+                {suppliers.map((s, idx) => (
                   <tr key={idx}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{s.supplierId}</td>
                     <td style={{ fontWeight: 600 }}>{s.supplierName}</td>
@@ -320,7 +329,7 @@ export default function MasterDataView() {
             </table>
           </div>
           <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
-            Total: {supplierMaster.length} supplier-product relationships · {getAllSuppliers().length} unique suppliers
+            Total: {suppliers.length} supplier-product relationships · {getLocalUniqueSuppliers().length} unique suppliers
           </div>
         </div>
       )}

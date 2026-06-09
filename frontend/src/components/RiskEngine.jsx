@@ -495,7 +495,7 @@ function getCalculationDetails(product, localCrit, localTar, localCorr, config, 
   };
 }
 
-export default function RiskEngine({ currency, convertAmount }) {
+export default function RiskEngine({ currency, convertAmount, products, suppliers }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCell, setSelectedCell] = useState(null); // format: { sde: 'S', ved: 'V' }
   const [riskFilter, setRiskFilter] = useState('All');
@@ -542,8 +542,8 @@ export default function RiskEngine({ currency, convertAmount }) {
     return () => resizeObserver.disconnect();
   }, []);
 
-  const records = useMemo(() => getInventoryRiskRecords(config), [config]);
-  const summary = useMemo(() => getRiskSummary(config), [config]);
+  const records = useMemo(() => getInventoryRiskRecords(config), [config, products, suppliers]);
+  const summary = useMemo(() => getRiskSummary(config), [config, products, suppliers]);
 
   // Format currencies helper
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);

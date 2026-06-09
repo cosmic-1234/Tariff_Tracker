@@ -102,18 +102,21 @@ function computeTreemapLayout(items, x, y, width, height) {
   }
 }
 
-export default function CriticalityScoring({ currency, convertAmount }) {
+export default function CriticalityScoring({ currency, convertAmount, products = [], suppliers = [] }) {
   // --- STATE DECLARATIONS ---
   const [components, setComponents] = useState(() => {
     // Dynamically build initial components with calculations from product/supplier master
-    return productMaster.map(p => {
-      const suppliers = getSuppliersForProduct(p.erpCode) || [];
-      const primarySupplier = suppliers.reduce((prev, current) => 
+    const sourceProducts = products && products.length > 0 ? products : productMaster;
+    return sourceProducts.map(p => {
+      const productSuppliers = suppliers && suppliers.length > 0
+        ? suppliers.filter(s => s.productErpCode === p.erpCode)
+        : (getSuppliersForProduct(p.erpCode) || []);
+      const primarySupplier = productSuppliers.reduce((prev, current) => 
         (prev.supplyPct > current.supplyPct) ? prev : current, { supplyPct: 100, reliability: 90, leadTimeDays: 15, moq: 1, country: 'India' }
       );
 
-      const maxLeadTime = suppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
-      const numSuppliers = suppliers.length || 1;
+      const maxLeadTime = productSuppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
+      const numSuppliers = productSuppliers.length || 1;
       const defaultVed = getDefaultVedSubFactors(p.category);
 
       return {
@@ -145,6 +148,50 @@ export default function CriticalityScoring({ currency, convertAmount }) {
       };
     });
   });
+
+  // Sync components when backend products or suppliers are fetched
+  useEffect(() => {
+    if (products && products.length > 0) {
+      setComponents(products.map(p => {
+        const productSuppliers = suppliers.filter(s => s.productErpCode === p.erpCode) || [];
+        const primarySupplier = productSuppliers.reduce((prev, current) => 
+          (prev.supplyPct > current.supplyPct) ? prev : current, { supplyPct: 100, reliability: 90, leadTimeDays: 15, moq: 1, country: 'India' }
+        );
+
+        const maxLeadTime = productSuppliers.reduce((max, s) => Math.max(max, s.leadTimeDays), 15);
+        const numSuppliers = productSuppliers.length || 1;
+        const defaultVed = getDefaultVedSubFactors(p.category);
+
+        return {
+          erpCode: p.erpCode,
+          hsCode: p.hsCode,
+          category: p.category,
+          description: p.description,
+          inHandInventory: p.inHandInventory,
+          inventoryValue: p.inventoryValue,
+          inTransitInventory: p.inTransitInventory,
+          daysOfCoverage: p.daysOfCoverage || p.daysOfCover || 30,
+          roq: p.roq,
+          safetyStock: p.safetyStock,
+          
+          // SDE scoring elements
+          supplierCode: primarySupplier.supplierId || 'SUP0001',
+          supplierName: primarySupplier.supplierName || 'Primary Supplier',
+          countryOfOrigin: primarySupplier.country || 'India',
+          supplyPct: primarySupplier.supplyPct || 100,
+          reliabilityOTIF: primarySupplier.reliability || 90,
+          leadTimeDays: maxLeadTime,
+          moq: primarySupplier.moq || 1,
+          numSuppliers,
+
+          // VED scoring elements (defaults)
+          ...defaultVed,
+          
+          isCustom: false
+        };
+      }));
+    }
+  }, [products, suppliers]);
 
   const [activeTab, setActiveTab] = useState('upload'); // 'upload' or 'manual'
   const [selectedCell, setSelectedCell] = useState(null); // { sde: 1-5, ved: 1-5 }

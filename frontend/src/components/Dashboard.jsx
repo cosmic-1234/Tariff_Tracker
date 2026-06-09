@@ -5,24 +5,27 @@ import { supplierMaster, getSuppliersForProduct } from '../data/supplierMaster.j
 import { getInventoryCriticality } from '../data/productMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
-export default function Dashboard({ onNavigate, currency, convertAmount }) {
+export default function Dashboard({ onNavigate, currency, convertAmount, products = productMaster, suppliers = supplierMaster }) {
+
+  // Local helper for suppliers
+  const getLocalSuppliers = (erpCode) => suppliers.filter(s => s.productErpCode === erpCode);
 
   // Calculate dashboard KPIs
-  const totalProducts = productMaster.length;
-  const totalSuppliers = [...new Set(supplierMaster.map(s => s.supplierId))].length;
-  const totalCountries = [...new Set(supplierMaster.map(s => s.country))].length;
+  const totalProducts = products.length;
+  const totalSuppliers = [...new Set(suppliers.map(s => s.supplierId))].length;
+  const totalCountries = [...new Set(suppliers.map(s => s.country))].length;
 
-  const criticalProducts = productMaster.filter(p => getInventoryCriticality(p.daysOfCoverage) === 'Critical');
+  const criticalProducts = products.filter(p => getInventoryCriticality(p.daysOfCoverage) === 'Critical');
 
-  const totalInventoryValue = productMaster.reduce((sum, p) => sum + p.inventoryValue, 0);
-  const avgDaysOfCoverage = Math.round(productMaster.reduce((sum, p) => sum + p.daysOfCoverage, 0) / totalProducts);
+  const totalInventoryValue = products.reduce((sum, p) => sum + p.inventoryValue, 0);
+  const avgDaysOfCoverage = totalProducts > 0 ? Math.round(products.reduce((sum, p) => sum + p.daysOfCoverage, 0) / totalProducts) : 0;
 
 
   // Top products by inventory value
-  const topProducts = [...productMaster].sort((a, b) => b.inventoryValue - a.inventoryValue).slice(0, 5);
+  const topProducts = [...products].sort((a, b) => b.inventoryValue - a.inventoryValue).slice(0, 5);
 
   // Risk products (critical inventory)
-  const riskProducts = [...productMaster]
+  const riskProducts = [...products]
     .filter(p => p.daysOfCoverage <= 20)
     .sort((a, b) => a.daysOfCoverage - b.daysOfCoverage);
 
@@ -36,7 +39,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
           </div>
           <div className="kpi-label">Total Products Tracked</div>
           <div className="kpi-value">{totalProducts}</div>
-          <div className="kpi-change neutral">{productMaster.filter(p => p.category === 'Mechanical').length} Mechanical · {productMaster.filter(p => p.category === 'Electrical').length} Electrical</div>
+          <div className="kpi-change neutral">{products.filter(p => p.category === 'Mechanical').length} Mechanical · {products.filter(p => p.category === 'Electrical').length} Electrical</div>
         </div>
 
         <div className="kpi-card">
@@ -71,7 +74,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
             <ShieldAlert size={20} />
           </div>
           <div className="kpi-label">Tariff Risk Exposure</div>
-          <div className="kpi-value small">{productMaster.filter(p => p.daysOfCoverage <= 30).length} / {totalProducts}</div>
+          <div className="kpi-value small">{products.filter(p => p.daysOfCoverage <= 30).length} / {totalProducts}</div>
           <div className="kpi-change warning">Products with ≤30 day coverage</div>
         </div>
 
@@ -149,7 +152,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
               </thead>
               <tbody>
                 {topProducts.map(p => {
-                  const suppliers = getSuppliersForProduct(p.erpCode);
+                  const productSuppliers = getLocalSuppliers(p.erpCode);
                   return (
                     <tr key={p.erpCode} className="clickable" onClick={() => onNavigate('calculator')}>
                       <td>
@@ -159,7 +162,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
                       <td style={{ fontWeight: 700, color: 'var(--success)' }}>
                         {formatCurrency(convertAmount(p.inventoryValue), currency)}
                       </td>
-                      <td>{suppliers.length} suppliers</td>
+                      <td>{productSuppliers.length} suppliers</td>
                       <td><span className="badge info">{p.reviewType}</span></td>
                     </tr>
                   );
@@ -198,7 +201,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount }) {
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
           {(() => {
             const countryCount = {};
-            supplierMaster.forEach(s => {
+            suppliers.forEach(s => {
               if (!countryCount[s.country]) countryCount[s.country] = { count: 0, region: s.region };
               countryCount[s.country].count++;
             });

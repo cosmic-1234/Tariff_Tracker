@@ -31,15 +31,15 @@ function createSeededRandom(seedString) {
   };
 }
 
-export default function AutonomousProcurement({ currency, convertAmount }) {
+export default function AutonomousProcurement({ currency, convertAmount, products = productMaster, allSuppliers = supplierMaster }) {
   // --- STATE ---
-  const [selectedProduct, setSelectedProduct] = useState(productMaster[0]);
+  const [selectedProduct, setSelectedProduct] = useState(products[0]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   
   // Solver controls
   const [destinationCountry, setDestinationCountry] = useState('India');
-  const [totalDemand, setTotalDemand] = useState(productMaster[0]?.roq || 15);
+  const [totalDemand, setTotalDemand] = useState(products[0]?.roq || 15);
   const [serviceLevelZ, setServiceLevelZ] = useState(1.65); // Default 95% service level
   const [holdingCostRate, setHoldingCostRate] = useState(0.15); // Default 15% holding cost
   const [riskWeight, setRiskWeight] = useState(1.0); // Default risk multiplier
@@ -78,19 +78,19 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
 
   // Product lookup helper
   const filteredProducts = useMemo(() => {
-    if (!searchQuery) return productMaster.slice(0, 8);
-    return productMaster.filter(p =>
+    if (!searchQuery) return products.slice(0, 8);
+    return products.filter(p =>
       p.erpCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.hsCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.description.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery]);
+  }, [searchQuery, products]);
 
   // Fetch suppliers for selected product
   const suppliers = useMemo(() => {
     if (!selectedProduct) return [];
-    return getSuppliersForProduct(selectedProduct.erpCode);
-  }, [selectedProduct]);
+    return allSuppliers.filter(s => s.productErpCode === selectedProduct.erpCode);
+  }, [selectedProduct, allSuppliers]);
 
   // Daily usage calculation
   const dailyUse = useMemo(() => {
@@ -112,9 +112,9 @@ export default function AutonomousProcurement({ currency, convertAmount }) {
 
   // Calculate inventory alerts and status for all products
   const productAlerts = useMemo(() => {
-    return productMaster.map(p => {
+    return products.map(p => {
       // Find all suppliers for the product to identify principal and regional exposure
-      const productSuppliers = supplierMaster.filter(s => s.productErpCode === p.erpCode);
+      const productSuppliers = allSuppliers.filter(s => s.productErpCode === p.erpCode);
       const primarySupplier = productSuppliers.reduce(
         (max, s) => (s.supplyPct > (max?.supplyPct || 0) ? s : max), 
         null

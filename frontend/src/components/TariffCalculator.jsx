@@ -26,7 +26,7 @@ const getInitialSupplierInputs = (product, suppliers) => {
   });
 };
 
-export default function TariffCalculator({ currency, convertAmount, preselectedProduct, clearPreselectedProduct }) {
+export default function TariffCalculator({ currency, convertAmount, preselectedProduct, clearPreselectedProduct, products = productMaster, suppliers: allSuppliers = supplierMaster }) {
   // Load initial state from sessionStorage (persisting state between tab navigations)
   const savedState = useMemo(() => {
     try {
@@ -65,10 +65,10 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
     setLiveSuggestions([]);
 
     // Try to find product by HS code or ERP code
-    const product = getProductByHSCode(value) || getProductByERPCode(value);
+    const product = products.find(p => p.hsCode === value) || products.find(p => p.erpCode === value);
     if (product) {
       setSelectedProduct(product);
-      const productSuppliers = getSuppliersForProduct(product.erpCode);
+      const productSuppliers = allSuppliers.filter(s => s.productErpCode === product.erpCode);
       setSuppliers(productSuppliers);
       setSupplierInputs(getInitialSupplierInputs(product, productSuppliers));
     } else {
@@ -118,17 +118,17 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
         }).catch(() => setIsSearchingApi(false));
       }
     }
-  }, []);
+  }, [products, allSuppliers]);
 
   const handleProductSelect = useCallback((product) => {
     setHsCode(product.hsCode);
     setSelectedProduct(product);
     setCalcResult(null);
     setShowScenario(false);
-    const productSuppliers = getSuppliersForProduct(product.erpCode);
+    const productSuppliers = allSuppliers.filter(s => s.productErpCode === product.erpCode);
     setSuppliers(productSuppliers);
     setSupplierInputs(getInitialSupplierInputs(product, productSuppliers));
-  }, []);
+  }, [allSuppliers]);
 
   // ── Preselected Product Effect ──
   useEffect(() => {
@@ -253,13 +253,13 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
   // Product suggestions dropdown
   const [showSuggestions, setShowSuggestions] = useState(false);
   const filteredProducts = useMemo(() => {
-    if (!hsCode) return productMaster.slice(0, 8);
-    return productMaster.filter(p =>
+    if (!hsCode) return products.slice(0, 8);
+    return products.filter(p =>
       p.hsCode.includes(hsCode) ||
       p.description.toLowerCase().includes(hsCode.toLowerCase()) ||
       p.erpCode.toLowerCase().includes(hsCode.toLowerCase())
     );
-  }, [hsCode]);
+  }, [hsCode, products]);
 
   return (
     <div className="animate-fade-in">
@@ -435,7 +435,7 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
               </div>
               <div className="supplier-detail-row">
                 <span className="supplier-detail-label">Countries Supplying</span>
-                <span className="supplier-detail-value auto-calc">{getSupplierCountries(selectedProduct.erpCode).length}</span>
+                <span className="supplier-detail-value auto-calc">{allSuppliers.filter(s => s.productErpCode === selectedProduct.erpCode).map(s => s.country).filter((v, i, a) => a.indexOf(v) === i).length}</span>
               </div>
               <div className="supplier-detail-row">
                 <span className="supplier-detail-label">Current Inventory</span>

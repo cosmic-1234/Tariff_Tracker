@@ -248,7 +248,7 @@ function computeTreemapLayout(items, x, y, width, height) {
   }
 }
 
-export default function InventoryClassification({ currency, convertAmount }) {
+export default function InventoryClassification({ currency, convertAmount, products, suppliers }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCell, setSelectedCell] = useState(null); // format: { sde: 'S', ved: 'V' }
   const [riskFilter, setRiskFilter] = useState('All');
@@ -276,8 +276,8 @@ export default function InventoryClassification({ currency, convertAmount }) {
     return () => resizeObserver.disconnect();
   }, []);
 
-  const records = useMemo(() => getInventoryRiskRecords(), []);
-  const summary = useMemo(() => getRiskSummary(), []);
+  const records = useMemo(() => getInventoryRiskRecords(), [products, suppliers]);
+  const summary = useMemo(() => getRiskSummary(), [products, suppliers]);
 
   // Format currencies helper
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);

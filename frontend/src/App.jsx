@@ -11,6 +11,9 @@ import AutonomousProcurement from './components/AutonomousProcurement.jsx';
 import { fetchExchangeRates } from './services/exchangeRateService.js';
 import { fetchLiveCountries } from './services/countryService.js';
 import { countries } from './data/masterData.js';
+import { fetchProducts, fetchSuppliers } from './services/dataService.js';
+import { productMaster } from './data/productMaster.js';
+import { supplierMaster } from './data/supplierMaster.js';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -23,6 +26,11 @@ function App() {
   const [countriesList, setCountriesList] = useState(countries);
   const [selectedProductForCalc, setSelectedProductForCalc] = useState(null);
 
+  const [products, setProducts] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
   // Sync theme to root element
   useEffect(() => {
     localStorage.setItem('tariff_tracker_theme', theme);
@@ -33,23 +41,57 @@ function App() {
     }
   }, [theme]);
 
-  // Fetch exchange rates and countries on mount
+  // Fetch exchange rates, countries, and MongoDB data on mount
   useEffect(() => {
     const loadRates = async () => {
-      const result = await fetchExchangeRates('USD');
-      setExchangeRates(result.rates);
-      setRateSource(result.source);
+      try {
+        const result = await fetchExchangeRates('USD');
+        setExchangeRates(result.rates);
+        setRateSource(result.source);
+      } catch (err) {
+        console.error('Failed to load exchange rates:', err);
+      }
     };
     const loadCountries = async () => {
-      const result = await fetchLiveCountries();
-      if (result && result.countries) {
-        countries.length = 0;
-        countries.push(...result.countries);
-        setCountriesList([...result.countries]);
+      try {
+        const result = await fetchLiveCountries();
+        if (result && result.countries) {
+          countries.length = 0;
+          countries.push(...result.countries);
+          setCountriesList([...result.countries]);
+        }
+      } catch (err) {
+        console.error('Failed to load countries:', err);
+      }
+    };
+    const loadMainData = async () => {
+      try {
+        const fetchedProducts = await fetchProducts();
+        const fetchedSuppliers = await fetchSuppliers();
+        
+        // Mutate local static arrays for lookup functions compatibility
+        productMaster.length = 0;
+        productMaster.push(...fetchedProducts);
+        
+        supplierMaster.length = 0;
+        supplierMaster.push(...fetchedSuppliers);
+        
+        setProducts(fetchedProducts);
+        setSuppliers(fetchedSuppliers);
+        
+        if (fetchedProducts.length > 0 && !selectedProductForCalc) {
+          setSelectedProductForCalc(fetchedProducts[0]);
+        }
+      } catch (err) {
+        console.error('Failed to load products/suppliers from MongoDB Atlas:', err);
+        setLoadError(err.message);
+      } finally {
+        setLoadingData(false);
       }
     };
     loadRates();
     loadCountries();
+    loadMainData();
   }, []);
 
   const convertAmount = useCallback((amount, fromCurrency = 'USD') => {
@@ -72,9 +114,9 @@ function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} />;
+        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'procurement':
-        return <AutonomousProcurement currency={currency} convertAmount={convertAmount} />;
+        return <AutonomousProcurement currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'calculator':
         return (
           <TariffCalculator
@@ -82,14 +124,16 @@ function App() {
             convertAmount={convertAmount}
             preselectedProduct={selectedProductForCalc}
             clearPreselectedProduct={() => setSelectedProductForCalc(null)}
+            products={products}
+            suppliers={suppliers}
           />
         );
       case 'scoring':
-        return <CriticalityScoring currency={currency} convertAmount={convertAmount} />;
+        return <CriticalityScoring currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'classification':
-        return <InventoryClassification currency={currency} convertAmount={convertAmount} />;
+        return <InventoryClassification currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'riskengine':
-        return <RiskEngine currency={currency} convertAmount={convertAmount} />;
+        return <RiskEngine currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
       case 'products':
         return (
           <ProductMaster
@@ -97,14 +141,74 @@ function App() {
             setSelectedProductForCalc={setSelectedProductForCalc}
             currency={currency}
             convertAmount={convertAmount}
+            products={products}
+            suppliers={suppliers}
           />
         );
       case 'masterdata':
-        return <MasterDataView />;
+        return <MasterDataView suppliers={suppliers} />;
       default:
-        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} />;
+        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
     }
   };
+
+  if (loadError) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: theme === 'light' ? '#f8fafc' : '#0a0e17',
+        color: theme === 'light' ? '#0f172a' : '#f1f5f9',
+        fontFamily: 'Inter, sans-serif',
+        padding: '20px',
+        textAlign: 'center'
+      }}>
+        <div style={{ color: '#ef4444', fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+        <div style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>Database Connection Failed</div>
+        <p style={{ fontSize: '14px', color: theme === 'light' ? '#475569' : '#94a3b8', maxWidth: '450px', margin: '0 0 20px', lineHeight: 1.5 }}>
+          Could not retrieve data from MongoDB Atlas. Please check that your <strong>MONGO_URI</strong> is correctly configured in <code>backend/.env</code> and that your MERN backend server is running on port 5000.
+        </p>
+        <button 
+          className="btn btn-primary"
+          onClick={() => window.location.reload()}
+          style={{ padding: '8px 16px', background: 'var(--tm-red, #e11d48)', border: 'none', borderRadius: '4px', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
+        >
+          Retry Connection
+        </button>
+      </div>
+    );
+  }
+
+  if (loadingData) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: theme === 'light' ? '#f8fafc' : '#0a0e17',
+        color: theme === 'light' ? '#0f172a' : '#f1f5f9',
+        fontFamily: 'Inter, sans-serif'
+      }}>
+        <div className="animate-spin" style={{
+          width: '40px',
+          height: '40px',
+          border: '4px solid #1e293b',
+          borderTop: '4px solid var(--tm-red, #e11d48)',
+          borderRadius: '50%',
+          marginBottom: '16px'
+        }} />
+        <div style={{ fontSize: '16px', fontWeight: 600 }}>📡 Connecting to MongoDB Atlas...</div>
+        <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px' }}>
+          Fetching inventory and supplier master records from database
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`tm-app-layout ${theme}`}>

@@ -4,7 +4,7 @@ import { productMaster, getInventoryCriticality } from '../data/productMaster.js
 import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
-export default function ProductMaster({ onNavigate, setSelectedProductForCalc, currency, convertAmount }) {
+export default function ProductMaster({ onNavigate, setSelectedProductForCalc, currency, convertAmount, products = productMaster, suppliers = supplierMaster }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState('erpCode');
   const [sortDir, setSortDir] = useState('asc');
@@ -20,7 +20,7 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
   };
 
   const filteredProducts = useMemo(() => {
-    let result = [...productMaster];
+    let result = [...products];
 
     // Category filter
     if (categoryFilter !== 'all') {
@@ -54,7 +54,7 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
 
   const fmt = (amount) => formatCurrency(convertAmount(amount), currency);
 
-  const categories = ['all', ...new Set(productMaster.map(p => p.category))];
+  const categories = ['all', ...new Set(products.map(p => p.category))];
 
   const renderSortIcon = (field) => (
     <span style={{ opacity: sortField === field ? 1 : 0.3, marginLeft: '4px' }}>
@@ -68,11 +68,11 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
       <div className="kpi-grid stagger-children" style={{ marginBottom: '20px' }}>
         <div className="kpi-card">
           <div className="kpi-label">Total Products</div>
-          <div className="kpi-value">{productMaster.length}</div>
+          <div className="kpi-value">{products.length}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Total Inventory Value</div>
-          <div className="kpi-value small">{fmt(productMaster.reduce((s, p) => s + p.inventoryValue, 0))}</div>
+          <div className="kpi-value small">{fmt(products.reduce((s, p) => s + p.inventoryValue, 0))}</div>
         </div>
       </div>
 
@@ -150,7 +150,7 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
             <tbody>
               {filteredProducts.map(p => {
                 const criticality = getInventoryCriticality(p.daysOfCoverage);
-                const suppliers = getSuppliersForProduct(p.erpCode);
+                const productSuppliers = suppliers.filter(s => s.productErpCode === p.erpCode);
                 return (
                   <tr key={p.erpCode} className="clickable" onClick={() => {
                     setSelectedProductForCalc(p);
@@ -180,7 +180,7 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
                         {criticality}
                       </span>
                     </td>
-                    <td style={{ fontWeight: 600 }}>{suppliers.length}</td>
+                    <td style={{ fontWeight: 600 }}>{productSuppliers.length}</td>
                   </tr>
                 );
               })}
@@ -189,7 +189,7 @@ export default function ProductMaster({ onNavigate, setSelectedProductForCalc, c
         </div>
 
         <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
-          Showing {filteredProducts.length} of {productMaster.length} products · Click any row to calculate tariff
+          Showing {filteredProducts.length} of {products.length} products · Click any row to calculate tariff
         </div>
       </div>
     </div>
