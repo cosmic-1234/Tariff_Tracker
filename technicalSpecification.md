@@ -123,26 +123,43 @@ This guide details how to install, configure, and host the MERN system on a loca
 
 ---
 
-### Step 2: Workspace Configuration
-1. Unzip or clone the project directory onto the target machine.
-2. Navigate to the root project directory.
-3. Open `backend/.env` and replace the placeholder fields with your database connection string and AWS Bedrock credentials:
+### Step 2: Workspace Configuration & API Keys Setup
+
+1. Navigate to the `backend/` directory of the project.
+2. Create or open the environment configuration file named **`backend/.env`**.
+3. Insert your database connection string and AWS Bedrock IAM keys. Use the following detailed configuration structure:
 
 ```ini
-# Port on which the API Server runs
+# ==============================================================================
+# 1. API SERVER PORT CONFIGURATION
+# ==============================================================================
 PORT=5000
 
-# MongoDB Connection String (Atlas Cluster)
-MONGO_URI=mongodb+srv://admin:yourpassword@ahan.kfoiwgs.mongodb.net/partnership_fitment?retryWrites=true&w=majority&appName=Ahan
+# ==============================================================================
+# 2. MONGODB ATLAS API CONNECTION KEY (Required)
+# ==============================================================================
+# Place your MongoDB Atlas connection string here.
+# - Where to obtain: MongoDB Atlas Cloud Console -> Connect -> Connect to Application -> Driver Node.js
+# - Replace 'admin' and 'yourpassword' with your database user credentials.
+MONGO_URI=mongodb+srv://admin:yourpassword@ahan.kfoiwgs.mongodb.net/partnership_fitment?retryWrites=true&w=majority
 
-# Node Environment
-NODE_ENV=development
-
-# AWS Bedrock Configurations (Required for Live AI Summaries, falls back to offline model if omitted)
+# ==============================================================================
+# 3. AMAZON BEDROCK AI ACCESS KEYS (Optional - Fallback Enabled)
+# ==============================================================================
+# - AWS_ACCESS_KEY_ID & AWS_SECRET_ACCESS_KEY: AWS IAM credentials with Bedrock invoke privileges.
+# - Where to obtain: AWS Management Console -> IAM -> Users -> Select User -> Security Credentials -> Access Keys
+# - AWS_REGION: The AWS datacenter region where Amazon Bedrock Claude-3 model access is enabled (e.g., us-east-1, us-west-2).
+# - BEDROCK_MODEL_ID: Target AWS Bedrock model identifier. Defaults to anthropic.claude-3-haiku-20240307-v1:0.
 AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+
+# ==============================================================================
+# 4. EXTERNAL PUBLIC APIS (No Keys Required)
+# ==============================================================================
+# Note: World Bank Logistics (LPI) API and GDELT News API are open public REST endpoints
+# and DO NOT require any API keys or subscriptions to function. They are queried directly.
 ```
 
 ---
