@@ -1,7 +1,7 @@
 // Data Service
 // Interacts with MERN backend to fetch products and suppliers from MongoDB Atlas
 
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:5000/api`;
 
 /**
  * Fetch all products from MongoDB Atlas
