@@ -42,7 +42,7 @@ The system is built on a modular, decoupled MERN architecture integrated with li
 
 The following diagram illustrates the decoupled client-server architecture, business logic services, and external database/cloud integrations:
 
-![System Architecture](./technical_architecture.png)
+![System Architecture](./excalidraw_architecture.png)
 
 ---
 
