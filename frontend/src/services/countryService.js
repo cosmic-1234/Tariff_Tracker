@@ -2,7 +2,8 @@
 // Fetches live real-time country data (regions, flags, names, currencies) from REST Countries API
 // Incorporates localStorage caching with a 24-hour TTL and graceful fallbacks
 
-const API_URL = 'https://restcountries.com/v3.1/all';
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:5000/api`;
+const API_URL = `${API_BASE}/external/countries`;
 const CACHE_KEY = 'tariff_tracker_country_data';
 const CACHE_TTL = 86400000; // 24 hours in ms
 

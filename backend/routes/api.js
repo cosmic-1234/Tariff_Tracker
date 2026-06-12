@@ -4,6 +4,7 @@ const { getHealth } = require('../controllers/healthController');
 const { getProducts } = require('../controllers/productController');
 const { getSuppliers, getSuppliersByProduct } = require('../controllers/supplierController');
 const calculationsRouter = require('./calculations');
+const externalRouter = require('./external');
 
 // Health Check API
 router.get('/health', getHealth);
@@ -17,5 +18,8 @@ router.get('/suppliers/:productErpCode', getSuppliersByProduct);
 
 // Calculation Routes
 router.use('/calculations', calculationsRouter);
+
+// External API Proxy Routes
+router.use('/external', externalRouter);
 
 module.exports = router;

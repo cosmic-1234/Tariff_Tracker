@@ -241,3 +241,93 @@ exports.getRiskDetails = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
+/**
+ * Calculates criticality scoring components (5x5 SDE/VED matrix)
+ */
+exports.calculateCriticality = async (req, res) => {
+  try {
+    const { components, sdeWeights, vedWeights, countryTiers, bandsConfig, stockoutConfig } = req.body;
+    
+    if (!components || !Array.isArray(components)) {
+      return res.status(400).json({ success: false, error: 'Missing components array' });
+    }
+
+    const scoredComponents = calculationService.calculateCriticalityScores(
+      components,
+      sdeWeights,
+      vedWeights,
+      countryTiers,
+      bandsConfig,
+      stockoutConfig
+    );
+
+    res.json({
+      success: true,
+      scoredComponents
+    });
+  } catch (error) {
+    console.error('Failed to calculate criticality scores:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Calculates MOQ-based quantity and FOB cost for a product
+ */
+exports.calculateFob = async (req, res) => {
+  try {
+    const { erpCode, moqMultiplier, moq } = req.body;
+    const parsedM = parseInt(moqMultiplier);
+    const parsedMoq = parseInt(moq) || 1;
+    
+    const units = (isNaN(parsedM) || parsedM < 1) ? 0 : parsedM * parsedMoq;
+    
+    // Lookup product by ERP Code to find inventoryValue and inHandInventory
+    const Product = require('../models/Product');
+    const product = await Product.findOne({ erpCode }).lean();
+    
+    let unitCost = 11;
+    if (product) {
+      const inventoryVal = parseFloat(product.inventoryValue) || 0;
+      const inHand = parseInt(product.inHandInventory) || 0;
+      unitCost = (inventoryVal > 0 && inHand > 0) ? (inventoryVal / inHand) : 11;
+    }
+    
+    const fobVal = (units * unitCost).toFixed(2);
+    
+    res.json({
+      success: true,
+      units,
+      unitCost,
+      fobVal: units > 0 ? parseFloat(fobVal) : 0
+    });
+  } catch (error) {
+    console.error('Failed to calculate FOB price:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Calculates percentage override backward from dollar value
+ */
+exports.calculateOverride = async (req, res) => {
+  try {
+    const { value, fob } = req.body;
+    const parsedValue = parseFloat(value);
+    const parsedFob = parseFloat(fob) || 0;
+    
+    let percentage = undefined;
+    if (!isNaN(parsedValue) && parsedFob > 0) {
+      percentage = (parsedValue / parsedFob) * 100;
+    }
+    
+    res.json({
+      success: true,
+      percentage
+    });
+  } catch (error) {
+    console.error('Failed to calculate override:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};

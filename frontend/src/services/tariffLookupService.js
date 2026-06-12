@@ -2,6 +2,8 @@
 // Fetches official HS classification descriptions dynamically from the open public GOV.UK Trade Tariff API
 // Requires zero API keys and falls back gracefully on network failure
 
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:5000/api`;
+
 /**
  * Lookup description for a given HS code (automatically truncates to 4-digit prefix)
  * @param {string} hsCode - 4 to 10-digit HS Code
@@ -17,7 +19,7 @@ export async function lookupHSCodeDescription(hsCode) {
   const prefix = cleaned.substring(0, 4);
 
   try {
-    const response = await fetch(`https://trade-tariff.service.gov.uk/api/v2/headings/${prefix}`, {
+    const response = await fetch(`${API_BASE}/external/trade-tariff/headings/${prefix}`, {
       headers: { 'Accept': 'application/vnd.uktt.v2' }
     });
     if (!response.ok) throw new Error(`HMRC API error status: ${response.status}`);
@@ -50,7 +52,7 @@ export async function getHSCodesRecommendation(query) {
   try {
     if (cleaned.length === 2 || cleaned.length === 3) {
       const chapter = cleaned.substring(0, 2);
-      const response = await fetch(`https://trade-tariff.service.gov.uk/api/v2/chapters/${chapter}`, {
+      const response = await fetch(`${API_BASE}/external/trade-tariff/chapters/${chapter}`, {
         headers: { 'Accept': 'application/vnd.uktt.v2' }
       });
       if (!response.ok) throw new Error();
@@ -81,7 +83,7 @@ export async function getHSCodesRecommendation(query) {
       }
     } else if (cleaned.length >= 4) {
       const heading = cleaned.substring(0, 4);
-      const response = await fetch(`https://trade-tariff.service.gov.uk/api/v2/headings/${heading}`, {
+      const response = await fetch(`${API_BASE}/external/trade-tariff/headings/${heading}`, {
         headers: { 'Accept': 'application/vnd.uktt.v2' }
       });
       if (!response.ok) throw new Error();

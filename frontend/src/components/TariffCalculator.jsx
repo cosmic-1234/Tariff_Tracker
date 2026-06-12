@@ -1,13 +1,17 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Search, Calculator, ArrowRight, AlertTriangle, Info, MapPin, Ship, Plane, Train, TrendingUp, TrendingDown, ChevronDown, ChevronUp } from 'lucide-react';
-import { productMaster, getProductByHSCode, getProductByERPCode, getInventoryCriticality } from '../data/productMaster.js';
-import { getSuppliersForProduct, getSupplierCountries } from '../data/supplierMaster.js';
 import { countries, transportModes, getRegionForCountry, getApplicableCorridors } from '../data/masterData.js';
-import { calculateTariffAPI, runScenarioSimulation } from '../services/dataService.js';
+import { calculateTariffAPI, runScenarioSimulation, calculateFobAPI, calculateOverrideAPI } from '../services/dataService.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 import { lookupHSCodeDescription, getHSCodesRecommendation } from '../services/tariffLookupService.js';
 
 const TRANSPORT_ICONS = { 'Ship/Ocean': Ship, 'Air': Plane, 'Train': Train };
+
+const getInventoryCriticality = (daysOfCoverage) => {
+  if (daysOfCoverage <= 15) return 'Critical';
+  if (daysOfCoverage <= 30) return 'Medium';
+  return 'Low';
+};
 
 const getInitialSupplierInputs = (product, suppliers) => {
   const inventoryVal = parseFloat(product?.inventoryValue) || 0;
@@ -25,7 +29,7 @@ const getInitialSupplierInputs = (product, suppliers) => {
   });
 };
 
-export default function TariffCalculator({ currency, convertAmount, preselectedProduct, clearPreselectedProduct, products = productMaster, suppliers: allSuppliers = supplierMaster }) {
+export default function TariffCalculator({ currency, convertAmount, preselectedProduct, clearPreselectedProduct, products = [], suppliers: allSuppliers = [] }) {
   // Load initial state from sessionStorage (persisting state between tab navigations)
   const savedState = useMemo(() => {
     try {
@@ -200,32 +204,47 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
 
   // Handler for custom overrides from the breakdown card
   const handleOverrideChange = useCallback((supplierIndex, field, value, isRate) => {
+    const parsed = parseFloat(value);
+    
     setSupplierInputs(prev => {
       const updated = [...prev];
       const input = { ...updated[supplierIndex] };
-      const parsed = parseFloat(value);
       const fob = parseFloat(input.fob) || 0;
 
       if (field === 'fob') {
         input.fob = isNaN(parsed) ? '' : parsed;
+        updated[supplierIndex] = input;
       } else if (isRate) {
         // Percentage override
         const key = `${field}Override`;
         input[key] = isNaN(parsed) ? undefined : parsed;
+        updated[supplierIndex] = input;
       } else {
-        // Dollar value override -> backward calculate the percentage
+        // Dollar value override -> backward calculate the percentage via backend API
         const key = `${field}Override`;
         if (isNaN(parsed) || fob <= 0) {
           input[key] = undefined;
+          updated[supplierIndex] = input;
         } else {
-          input[key] = (parsed / fob) * 100;
+          // Trigger async calculation but do not block state update for other parts
+          calculateOverrideAPI(parsed, fob).then(pct => {
+            setSupplierInputs(latest => {
+              const latestUpdated = [...latest];
+              latestUpdated[supplierIndex] = {
+                ...latestUpdated[supplierIndex],
+                [key]: pct !== undefined ? pct : undefined
+              };
+              return latestUpdated;
+            });
+          }).catch(err => {
+            console.error('Failed to calculate override via API:', err);
+          });
         }
       }
 
-      updated[supplierIndex] = input;
       return updated;
     });
-  }, [calcResult]);
+  }, []);
 
   // ── Calculate ──
   const handleCalculate = useCallback(() => {
@@ -571,23 +590,37 @@ export default function TariffCalculator({ currency, convertAmount, preselectedP
                         const parsedM = parseInt(mStr);
                         const moq = supplier.moq || 1;
                         
-                        // Calculate units and FOB
                         const units = (isNaN(parsedM) || parsedM < 1) ? 0 : parsedM * moq;
-                        const inventoryVal = parseFloat(selectedProduct?.inventoryValue) || 0;
-                        const inHand = parseInt(selectedProduct?.inHandInventory) || 0;
-                        const unitCost = (inventoryVal > 0 && inHand > 0) ? (inventoryVal / inHand) : 11;
-                        const fobVal = (units * unitCost).toFixed(2);
-
-                        setSupplierInputs(prev => {
-                          const updated = [...prev];
-                          updated[idx] = { 
-                            ...updated[idx],
-                            moqMultiplier: mStr,
-                            numberOfUnits: units,
-                            fob: units > 0 ? parseFloat(fobVal) : ''
-                          };
-                          return updated;
-                        });
+                        
+                        if (units === 0) {
+                          setSupplierInputs(prev => {
+                            const updated = [...prev];
+                            updated[idx] = { 
+                              ...updated[idx],
+                              moqMultiplier: mStr,
+                              numberOfUnits: 0,
+                              fob: ''
+                            };
+                            return updated;
+                          });
+                        } else {
+                          calculateFobAPI(selectedProduct.erpCode, parsedM, moq)
+                            .then(res => {
+                              setSupplierInputs(prev => {
+                                const updated = [...prev];
+                                updated[idx] = { 
+                                  ...updated[idx],
+                                  moqMultiplier: mStr,
+                                  numberOfUnits: res.units,
+                                  fob: res.fobVal || ''
+                                };
+                                return updated;
+                              });
+                            })
+                            .catch(err => {
+                              console.error('Failed to calculate FOB via API:', err);
+                            });
+                        }
                       }}
                       min="1"
                       step="1"

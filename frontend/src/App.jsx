@@ -12,8 +12,6 @@ import { fetchExchangeRates } from './services/exchangeRateService.js';
 import { fetchLiveCountries } from './services/countryService.js';
 import { countries } from './data/masterData.js';
 import { fetchProducts, fetchSuppliers, fetchRiskRecords } from './services/dataService.js';
-import { productMaster } from './data/productMaster.js';
-import { supplierMaster } from './data/supplierMaster.js';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -71,13 +69,6 @@ function App() {
         const fetchedProducts = await fetchProducts();
         const fetchedSuppliers = await fetchSuppliers();
         
-        // Mutate local static arrays for lookup functions compatibility
-        productMaster.length = 0;
-        productMaster.push(...fetchedProducts);
-        
-        supplierMaster.length = 0;
-        supplierMaster.push(...fetchedSuppliers);
-        
         setProducts(fetchedProducts);
         setSuppliers(fetchedSuppliers);
 
@@ -121,7 +112,7 @@ function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} />;
+        return <Dashboard onNavigate={setCurrentPage} currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} riskSummary={riskSummary} />;
       case 'procurement':
         return <AutonomousProcurement currency={currency} convertAmount={convertAmount} products={products} suppliers={suppliers} riskRecords={riskRecords} />;
       case 'calculator':

@@ -1,8 +1,8 @@
 // Exchange Rate Service
 // Uses ExchangeRate-API with localStorage caching and manual fallback
 
-const API_KEY = '95ef2d9d91cb825be6a26d14';
-const BASE_URL = `https://v6.exchangerate-api.com/v6/${API_KEY}`;
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:5000/api`;
+const BASE_URL = `${API_BASE}/external/exchange-rates`;
 const CACHE_KEY = 'tariff_tracker_exchange_rates';
 const CACHE_TTL = 3600000; // 1 hour in ms
 

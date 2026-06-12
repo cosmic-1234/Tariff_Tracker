@@ -3,10 +3,9 @@ import {
   ShieldAlert, Settings2, FileSpreadsheet, Plus, Upload, Download, Filter, 
   Trash2, Edit3, CheckCircle2, ChevronRight, ChevronLeft, Layers, Sliders, MapPin, RefreshCw
 } from 'lucide-react';
-import { productMaster } from '../data/productMaster.js';
-import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 import { lookupHSCodeDescription, getHSCodesRecommendation } from '../services/tariffLookupService.js';
+import { fetchCriticalityScores } from '../services/dataService.js';
 
 // Pre-defined fallback default VED sub-factors for the 30 base components
 function getDefaultVedSubFactors(category) {
@@ -106,11 +105,11 @@ export default function CriticalityScoring({ currency, convertAmount, products =
   // --- STATE DECLARATIONS ---
   const [components, setComponents] = useState(() => {
     // Dynamically build initial components with calculations from product/supplier master
-    const sourceProducts = products && products.length > 0 ? products : productMaster;
+    const sourceProducts = products && products.length > 0 ? products : [];
     return sourceProducts.map(p => {
       const productSuppliers = suppliers && suppliers.length > 0
         ? suppliers.filter(s => s.productErpCode === p.erpCode)
-        : (getSuppliersForProduct(p.erpCode) || []);
+        : [];
       const primarySupplier = productSuppliers.reduce((prev, current) => 
         (prev.supplyPct > current.supplyPct) ? prev : current, { supplyPct: 100, reliability: 90, leadTimeDays: 15, moq: 1, country: 'India' }
       );
@@ -343,122 +342,37 @@ export default function CriticalityScoring({ currency, convertAmount, products =
     return `rgba(${r}, ${g}, ${b}, ${opacity})`;
   };
 
-  // Sourcing difficulty (SDE) sub-factor calculations
-  const calculateScores = (comp) => {
-    // 1. Supplier Concentration
-    const supplyPct = Number(comp.supplyPct || 100);
-    const numSuppliers = Number(comp.numSuppliers || 1);
-    let concentration = 1;
-    if (supplyPct > 85 || numSuppliers === 1) concentration = 5;
-    else if (supplyPct > 70) concentration = 4;
-    else if (supplyPct > 50) concentration = 3;
-    else if (supplyPct >= 30) concentration = 2;
-    else concentration = 1;
+  const [scoredComponents, setScoredComponents] = useState([]);
+  const [isScoringLoading, setIsScoringLoading] = useState(false);
 
-    // 2. Lead Time Days
-    const leadTime = Number(comp.leadTimeDays || 15);
-    let leadTimeScore = 1;
-    if (leadTime > 60) leadTimeScore = 5;
-    else if (leadTime > 30) leadTimeScore = 4;
-    else if (leadTime > 14) leadTimeScore = 3;
-    else if (leadTime > 7) leadTimeScore = 2;
-    else leadTimeScore = 1;
-
-    // 3. Reliability (OTIF %)
-    const otif = Number(comp.reliabilityOTIF || 90);
-    let reliabilityScore = 1;
-    if (otif < 60) reliabilityScore = 5;
-    else if (otif <= 75) reliabilityScore = 4;
-    else if (otif <= 85) reliabilityScore = 3;
-    else if (otif <= 95) reliabilityScore = 2;
-    else reliabilityScore = 1;
-
-    // 4. Inventory Buffer Strength
-    const doc = Number(comp.daysOfCoverage || 20);
-    const bufferRatio = leadTime > 0 ? doc / leadTime : 3.0;
-    let bufferScore = 1;
-    if (bufferRatio < 0.5) bufferScore = 5;
-    else if (bufferRatio <= 1.0) bufferScore = 4;
-    else if (bufferRatio <= 2.0) bufferScore = 3;
-    else if (bufferRatio <= 3.0) bufferScore = 2;
-    else bufferScore = 1;
-
-    // 5. MOQ Rigidity
-    const moq = Number(comp.moq || 1);
-    const roq = Number(comp.roq || 10);
-    const moqRatio = roq > 0 ? moq / roq : 1.0;
-    let moqScore = 1;
-    if (moqRatio > 2.5) moqScore = 5;
-    else if (moqRatio > 1.5) moqScore = 4;
-    else if (moqRatio > 1.0) moqScore = 3;
-    else if (moqRatio >= 0.5) moqScore = 2;
-    else moqScore = 1;
-
-    // 6. Geography risk
-    const country = comp.countryOfOrigin || 'India';
-    const geoScore = Number(countryTiers[country] || countryTiers['Other'] || 3);
-
-    // Compute SDE score (weighted and rounded to 1-5 integer)
-    const rawSDE = (
-      sdeWeights.concentration * concentration +
-      sdeWeights.leadTime * leadTimeScore +
-      sdeWeights.reliability * reliabilityScore +
-      sdeWeights.buffer * bufferScore +
-      sdeWeights.moq * moqScore +
-      sdeWeights.geography * geoScore
-    );
-    const sdeScore = Math.min(5, Math.max(1, Math.round(rawSDE)));
-
-    // Compute VED score (weighted and rounded to 1-5 integer)
-    const rawVED = (
-      vedWeights.prodStop * Number(comp.prodStop || 3) +
-      vedWeights.bottleneck * Number(comp.bottleneck || 3) +
-      vedWeights.substitutability * Number(comp.substitutability || 3) +
-      vedWeights.safetyQuality * Number(comp.safetyQuality || 3) +
-      vedWeights.recovery * Number(comp.recovery || 3)
-    );
-    const vedScore = Math.min(5, Math.max(1, Math.round(rawVED)));
-
-    const compositeScore = sdeScore * vedScore;
-    const band = getBandName(compositeScore);
-    const colorClass = getBandColor(compositeScore);
-
-    // Derived flags & stats
-    const supplierDependencyFlag = supplyPct > 80 ? 1 : 0;
-    
-    // Stockout exposure flag
-    const inHand = Number(comp.inHandInventory || 0);
-    const safetyStock = Number(comp.safetyStock || 5);
-    const inTransit = Number(comp.inTransitInventory || 0);
-    
-    const stockoutExposureFlag = (
-      inHand < safetyStock &&
-      doc < stockoutConfig.docLowDays &&
-      inTransit === 0 &&
-      leadTime > stockoutConfig.leadTimeLongDays
-    ) ? 1 : 0;
-
-    const inventoryValue = Number(comp.inventoryValue || 0);
-    const inventoryExposureValue = inventoryValue * sdeScore;
-
-    return {
-      ...comp,
-      sdeScore,
-      vedScore,
-      compositeScore,
-      band,
-      colorClass,
-      bufferRatio,
-      moqRatio,
-      supplierDependencyFlag,
-      stockoutExposureFlag,
-      inventoryExposureValue
+  useEffect(() => {
+    let active = true;
+    async function fetchScores() {
+      if (!components || components.length === 0) return;
+      setIsScoringLoading(true);
+      try {
+        const scores = await fetchCriticalityScores(components, {
+          sdeWeights,
+          vedWeights,
+          countryTiers,
+          bandsConfig,
+          stockoutConfig
+        });
+        if (active) {
+          setScoredComponents(scores);
+        }
+      } catch (err) {
+        console.error('Failed to fetch criticality scores from backend:', err);
+      } finally {
+        if (active) {
+          setIsScoringLoading(false);
+        }
+      }
+    }
+    fetchScores();
+    return () => {
+      active = false;
     };
-  };
-
-  // Run scoring calculations over all active components
-  const scoredComponents = useMemo(() => {
-    return components.map(calculateScores);
   }, [components, sdeWeights, vedWeights, countryTiers, bandsConfig, stockoutConfig]);
 
   // Unique categories list for filters

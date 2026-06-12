@@ -148,3 +148,69 @@ export async function fetchRiskDetails(params) {
     throw error;
   }
 }
+
+/**
+ * Fetch criticality scores (5x5 matrix scoring) from backend calculations API
+ */
+export async function fetchCriticalityScores(components, config) {
+  try {
+    const response = await fetch(`${API_BASE}/calculations/criticality`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ components, ...config })
+    });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const data = await response.json();
+    if (data && data.success) {
+      return data.scoredComponents;
+    }
+    throw new Error('Criticality calculation API payload invalid');
+  } catch (error) {
+    console.error('Failed to fetch criticality scores:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Fetch MOQ-based quantity and FOB cost from backend calculations API
+ */
+export async function calculateFobAPI(erpCode, moqMultiplier, moq) {
+  try {
+    const response = await fetch(`${API_BASE}/calculations/fob-calculator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ erpCode, moqMultiplier, moq })
+    });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const data = await response.json();
+    if (data && data.success) {
+      return { units: data.units, fobVal: data.fobVal };
+    }
+    throw new Error('FOB calculation API payload invalid');
+  } catch (error) {
+    console.error('Failed to calculate FOB cost:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Fetch percentage override backward calculation from backend calculations API
+ */
+export async function calculateOverrideAPI(value, fob) {
+  try {
+    const response = await fetch(`${API_BASE}/calculations/override-calculator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value, fob })
+    });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const data = await response.json();
+    if (data && data.success) {
+      return data.percentage;
+    }
+    throw new Error('Override calculation API payload invalid');
+  } catch (error) {
+    console.error('Failed to calculate override:', error.message);
+    throw error;
+  }
+}

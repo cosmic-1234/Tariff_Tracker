@@ -1,10 +1,14 @@
 import { useState, useMemo } from 'react';
 import { Package, Search } from 'lucide-react';
-import { productMaster, getInventoryCriticality } from '../data/productMaster.js';
-import { getSuppliersForProduct } from '../data/supplierMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
-export default function ProductMaster({ onNavigate, setSelectedProductForCalc, currency, convertAmount, products = productMaster, suppliers = supplierMaster }) {
+const getInventoryCriticality = (daysOfCoverage) => {
+  if (daysOfCoverage <= 15) return 'Critical';
+  if (daysOfCoverage <= 30) return 'Medium';
+  return 'Low';
+};
+
+export default function ProductMaster({ onNavigate, setSelectedProductForCalc, currency, convertAmount, products = [], suppliers = [] }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState('erpCode');
   const [sortDir, setSortDir] = useState('asc');

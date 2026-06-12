@@ -4,16 +4,7 @@ import {
   Database, Sliders, Layers, Info, ShieldAlert, DollarSign, 
   Activity, ArrowRight, Clock, Sparkles, Download, RefreshCw, Send
 } from 'lucide-react';
-import { productMaster, getProductByERPCode, getInventoryCriticality } from '../data/productMaster.js';
-import { getSuppliersForProduct, supplierMaster } from '../data/supplierMaster.js';
-import { 
-  countries, 
-  getRegionForCountry, 
-  getInsuranceCostPct, 
-  getShippingCostPct, 
-  getTariffRate, 
-  getOtherDutiesPct 
-} from '../data/masterData.js';
+import { countries } from '../data/masterData.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 import { optimizeProcurement } from '../services/dataService.js';
 
@@ -31,15 +22,22 @@ function createSeededRandom(seedString) {
   };
 }
 
-export default function AutonomousProcurement({ currency, convertAmount, products = productMaster, allSuppliers = supplierMaster, riskRecords = [] }) {
+export default function AutonomousProcurement({ currency, convertAmount, products = [], suppliers: allSuppliers = [], riskRecords = [] }) {
   // --- STATE ---
-  const [selectedProduct, setSelectedProduct] = useState(products[0]);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   
+  // Initialize selected product when products load
+  useEffect(() => {
+    if (!selectedProduct && products && products.length > 0) {
+      setSelectedProduct(products[0]);
+    }
+  }, [products, selectedProduct]);
+
   // Solver controls
   const [destinationCountry, setDestinationCountry] = useState('India');
-  const [totalDemand, setTotalDemand] = useState(products[0]?.roq || 15);
+  const [totalDemand, setTotalDemand] = useState(15);
   const [serviceLevelZ, setServiceLevelZ] = useState(1.65); // Default 95% service level
   const [holdingCostRate, setHoldingCostRate] = useState(0.15); // Default 15% holding cost
   const [riskWeight, setRiskWeight] = useState(1.0); // Default risk multiplier
@@ -92,7 +90,7 @@ export default function AutonomousProcurement({ currency, convertAmount, product
     return allSuppliers.filter(s => s.productErpCode === selectedProduct.erpCode);
   }, [selectedProduct, allSuppliers]);
 
-  // Daily usage calculation
+  // Daily usage calculation from selectedProduct
   const dailyUse = useMemo(() => {
     if (!selectedProduct) return 2;
     const inv = selectedProduct.inHandInventory || 0;
@@ -113,63 +111,18 @@ export default function AutonomousProcurement({ currency, convertAmount, product
     return { rating: 'Medium', score: 3 };
   }, [selectedProduct, riskRecords]);
 
-  // Calculate inventory alerts and status for all products
+  // Retrieve inventory alerts and status from backend-driven risk records
   const productAlerts = useMemo(() => {
     return products.map(p => {
-      // Find all suppliers for the product to identify principal and regional exposure
-      const productSuppliers = allSuppliers.filter(s => s.productErpCode === p.erpCode);
-      const primarySupplier = productSuppliers.reduce(
-        (max, s) => (s.supplyPct > (max?.supplyPct || 0) ? s : max), 
-        null
-      );
-      
-      let level = 'OK'; 
-      let isOk = true;
-      let reason = '';
-      
-      // Stock critical if days of coverage <= 15 or in-hand is below safety stock
-      if (p.daysOfCoverage <= 15 || p.inHandInventory <= p.safetyStock) {
-        level = 'Critical';
-        isOk = false;
-        if (p.inHandInventory <= p.safetyStock) {
-          reason = `Critical deficit: Stock (${p.inHandInventory} units) is below safety stock limit of ${p.safetyStock} units.`;
-        } else {
-          reason = `Critical coverage: Only ${p.daysOfCoverage} days of supply remaining.`;
-        }
-      } 
-      // Stock warning if days of coverage is <= 35
-      else if (p.daysOfCoverage <= 35) {
-        level = 'Reorder';
-        isOk = false;
-        reason = `Reorder point reached: Days of coverage is low (${p.daysOfCoverage} days remaining).`;
-      } 
-      // Reliability risk: principal supplier is under 90% reliability
-      else if (primarySupplier && primarySupplier.reliability < 90) {
-        level = 'Supplier Risk';
-        isOk = false;
-        reason = `Threat to supply reliability: Principal supplier (${primarySupplier.supplierName}) reliability index is low (${primarySupplier.reliability}%).`;
-      } 
-      // Corridor threat: sourced primarily from Asia region (70% risk exposure)
-      else if (primarySupplier && primarySupplier.region === 'Asia') {
-        level = 'Corridor Threat';
-        isOk = false;
-        reason = `High corridor threat: Sourced primarily from Asia region (${primarySupplier.supplyPct}% risk exposure).`;
-      } 
-      // Stable
-      else {
-        level = 'OK';
-        isOk = true;
-        reason = `OK: Stock level stable (${p.daysOfCoverage} days of coverage). Principal supplier reliability is solid.`;
-      }
-      
+      const record = riskRecords.find(r => r.erpCode === p.erpCode) || {};
       return {
         product: p,
-        level,
-        isOk,
-        reason
+        level: record.alertLevel || 'OK',
+        isOk: record.isAlertOk !== undefined ? record.isAlertOk : true,
+        reason: record.alertReason || `OK: Stock level stable (${p.daysOfCoverage} days of coverage).`
       };
     });
-  }, []);
+  }, [products, riskRecords]);
 
   // Filter products based on showAlertsOnly state
   const filteredAlertProducts = useMemo(() => {
@@ -223,263 +176,38 @@ export default function AutonomousProcurement({ currency, convertAmount, product
     };
   }, [selectedProduct, suppliers, totalDemand, serviceLevelZ, holdingCostRate, riskWeight, dualSourcingEnabled, maxSharePct, destinationCountry, dailyUse, criticalityInfo]);
 
-  // --- DEMAND SENSING DAILY SIMULATION DATA GENERATOR ---
+  // Retrieve demand sensing simulation data directly from backend solver payload
   const demandSensingData = useMemo(() => {
-    if (!selectedProduct || !optimizationResults) return [];
-    
-    // Seed using product ERP code
-    const rand = createSeededRandom(selectedProduct.erpCode);
-    
-    const data = [];
-    const avgDailyDem = dailyUse;
-    
-    // 1. Generate History (Day -30 to Day 0)
-    // We start with inventory that depletes, receives a reorder, and depletes to current inHand
-    const currentStock = selectedProduct.inHandInventory;
-    const reorderLeadTime = Math.round(optimizationResults.solution.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * (s.qty / totalDemand), 0));
-    
-    let tempStock = currentStock;
-    // Step backwards to generate history
-    const historyPoints = [];
-    for (let day = 0; day >= -30; day--) {
-      historyPoints.unshift({
-        day,
-        stock: tempStock,
-        demand: Math.max(0, Math.round((avgDailyDem + (rand() - 0.5) * avgDailyDem * 0.4) * 10) / 10),
-      });
-      // Simulate inventory drain
-      tempStock += historyPoints[0].demand;
-      
-      // Simulate order arrival at Day -12 to make history look dynamic
-      if (day === -12) {
-        tempStock -= selectedProduct.roq || 15;
-      }
-    }
-    
-    // Adjust values to ensure history ends exactly at current inHandInventory on Day 0
-    let offset = currentStock - historyPoints[historyPoints.length - 1].stock;
-    historyPoints.forEach(p => {
-      p.stock = Math.max(0, p.stock + offset);
-    });
+    return optimizationResults?.demandSensingData || [];
+  }, [optimizationResults]);
 
-    // 2. Generate Projections (Day 1 to 15)
-    // Path A: Do Nothing (depletes steadily to stockout)
-    // Path B: Optimized order placed today (Day 0) arriving at LeadTime
-    let stockNoOrder = currentStock;
-    let stockWithOrder = currentStock;
-    const optOrderQty = totalDemand;
-    
-    const projectionPoints = [];
-    for (let day = 1; day <= 15; day++) {
-      const dem = Math.max(0, Math.round((avgDailyDem + (rand() - 0.5) * avgDailyDem * 0.3) * 10) / 10);
-      
-      stockNoOrder = Math.max(0, stockNoOrder - dem);
-      stockWithOrder = stockWithOrder - dem;
-      
-      // Handle order arrival
-      if (day === reorderLeadTime) {
-        stockWithOrder += optOrderQty;
-      }
-      
-      projectionPoints.push({
-        day,
-        demand: dem,
-        stockNoOrder: Math.round(stockNoOrder * 10) / 10,
-        stockWithOrder: Math.max(0, Math.round(stockWithOrder * 10) / 10),
-      });
-    }
-    
-    // Combine both arrays
-    const combined = [];
-    historyPoints.forEach(p => {
-      combined.push({
-        dayLabel: `Day ${p.day === 0 ? 'Today' : p.day}`,
-        dayVal: p.day,
-        historicalStock: Math.round(p.stock),
-        demand: p.demand,
-        projectedNoOrder: null,
-        projectedWithOrder: null,
-      });
-    });
-    
-    // Connect history to projection on Day 0
-    combined[combined.length - 1].projectedNoOrder = currentStock;
-    combined[combined.length - 1].projectedWithOrder = currentStock;
-
-    projectionPoints.forEach(p => {
-      combined.push({
-        dayLabel: `Day +${p.day}`,
-        dayVal: p.day,
-        historicalStock: null,
-        demand: p.demand,
-        projectedNoOrder: p.stockNoOrder,
-        projectedWithOrder: p.stockWithOrder,
-      });
-    });
-    
-    return combined;
-  }, [selectedProduct, dailyUse, optimizationResults, totalDemand]);
-
-  // --- SOURCING STRATEGIES COMPARISON CALCULATOR ---
+  // Retrieve strategy comparison directly from backend solver payload
   const strategyComparison = useMemo(() => {
-    if (!optimizationResults || !selectedProduct) return [];
-    
-    const supplierCosts = optimizationResults.supplierCosts;
-    const D = totalDemand;
-    
-    // Sort suppliers by cost and risk to find extreme options
-    const sortedByLanded = [...supplierCosts].sort((a, b) => a.landedCostPerUnit - b.landedCostPerUnit);
-    const sortedByRisk = [...supplierCosts].sort((a, b) => a.riskScore - b.riskScore);
-    
-    // Strategy 1: Optimized (MILP suggestion)
-    const optSol = optimizationResults.solution;
-    const optSumQty = optSol.supplierDetails.reduce((sum, s) => sum + s.qty, 0);
-    const optStrat = {
-      name: 'Optimized Model Suggestion',
-      isOpt: true,
-      allocations: optSol.supplierDetails.map(s => `${s.supplierName}: ${s.qty} units (${s.sharePct}%)`).join(', '),
-      landedCost: optSol.landedCost,
-      holdingCost: optSol.holdingCost + optSol.safetyStockCost,
-      riskPenalty: optSol.riskPenalty,
-      totalCost: optSol.totalCost,
-      avgLeadTime: optSumQty > 0 ? optSol.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * s.qty, 0) / optSumQty : 0,
-      avgReliability: optSumQty > 0 ? optSol.supplierDetails.reduce((sum, s) => sum + s.reliability * s.qty, 0) / optSumQty : 0
-    };
+    return optimizationResults?.strategies || [];
+  }, [optimizationResults]);
 
-    // Strategy 2: Cheapest Sourcing (100% Cheapest, respecting MOQ multiples)
-    let cheapestAlloc = {};
-    let cheapestCost = 0;
-    let cheapestHold = 0;
-    let cheapestRisk = 0;
-    let cheapestLT = 0;
-    let cheapestRel = 0;
-
-    const cheapestSupp = sortedByLanded[0];
-    const cheapestQty = Math.ceil(D / cheapestSupp.moq) * cheapestSupp.moq;
-    cheapestAlloc[cheapestSupp.supplierId] = cheapestQty;
-    cheapestCost = cheapestQty * cheapestSupp.landedCostPerUnit;
-    cheapestHold = (cheapestQty / 2) * cheapestSupp.holdingCostPerUnit + cheapestSupp.safetyStockCost;
-    cheapestRisk = cheapestQty * cheapestSupp.landedCostPerUnit * cheapestSupp.riskFactor;
-    cheapestLT = cheapestSupp.leadTimeDays;
-    cheapestRel = cheapestSupp.reliability;
-    
-    const cheapStrat = {
-      name: 'Lowest Landed Cost (Single Sourcing)',
-      allocations: `${cheapestSupp.supplierName}: ${cheapestAlloc[cheapestSupp.supplierId]} units (100%)`,
-      landedCost: cheapestCost,
-      holdingCost: cheapestHold,
-      riskPenalty: cheapestRisk,
-      totalCost: cheapestCost + cheapestHold + cheapestRisk,
-      avgLeadTime: cheapestLT,
-      avgReliability: cheapestRel
-    };
-
-    // Strategy 3: Safest Sourcing (100% Lowest Risk Supplier, respecting MOQ multiples)
-    let safestAlloc = {};
-    let safestCost = 0;
-    let safestHold = 0;
-    let safestRisk = 0;
-    let safestLT = 0;
-    let safestRel = 0;
-
-    const safestSupp = sortedByRisk[0];
-    const safestQty = Math.ceil(D / safestSupp.moq) * safestSupp.moq;
-    safestAlloc[safestSupp.supplierId] = safestQty;
-    safestCost = safestQty * safestSupp.landedCostPerUnit;
-    safestHold = (safestQty / 2) * safestSupp.holdingCostPerUnit + safestSupp.safetyStockCost;
-    safestRisk = safestQty * safestSupp.landedCostPerUnit * safestSupp.riskFactor;
-    safestLT = safestSupp.leadTimeDays;
-    safestRel = safestSupp.reliability;
-    
-    const safeStrat = {
-      name: 'Lowest Risk Profile',
-      allocations: `${safestSupp.supplierName}: ${safestAlloc[safestSupp.supplierId]} units (100%)`,
-      landedCost: safestCost,
-      holdingCost: safestHold,
-      riskPenalty: safestRisk,
-      totalCost: safestCost + safestHold + safestRisk,
-      avgLeadTime: safestLT,
-      avgReliability: safestRel
-    };
-
-    // Strategy 4: Current Default Split (historical supply percentages, respecting MOQ multiples)
-    let currentCost = 0;
-    let currentHold = 0;
-    let currentRisk = 0;
-    let currentLT = 0;
-    let currentRel = 0;
-    const currentAllocStrs = [];
-
-    const currentQtys = {};
-    let currentSumQty = 0;
-
-    supplierCosts.forEach(s => {
-      // Find original supply percentage
-      const origSupp = suppliers.find(orig => orig.supplierId === s.supplierId);
-      const supplyPct = origSupp ? origSupp.supplyPct : 50;
-      let qty = Math.round(D * (supplyPct / 100));
-      if (qty > 0) {
-        qty = Math.ceil(qty / s.moq) * s.moq;
-      }
-      currentQtys[s.supplierId] = qty;
-      currentSumQty += qty;
-    });
-
-    supplierCosts.forEach(s => {
-      const qty = currentQtys[s.supplierId];
-      if (qty > 0) {
-        const origSupp = suppliers.find(orig => orig.supplierId === s.supplierId);
-        const supplyPct = origSupp ? origSupp.supplyPct : 50;
-        const share = currentSumQty > 0 ? Math.round((qty / currentSumQty) * 100) : 0;
-        
-        currentAllocStrs.push(`${s.supplierName}: ${qty} units (${share}%)`);
-        currentCost += qty * s.landedCostPerUnit;
-        currentHold += (qty / 2) * s.holdingCostPerUnit + s.safetyStockCost;
-        currentRisk += qty * s.landedCostPerUnit * s.riskFactor;
-        currentLT += qty * s.leadTimeDays;
-        currentRel += qty * s.reliability;
-      }
-    });
-
-    const currentStrat = {
-      name: 'Current Default Allocation (As-Is)',
-      allocations: currentAllocStrs.join(', ') || 'No allocation',
-      landedCost: currentCost,
-      holdingCost: currentHold,
-      riskPenalty: currentRisk,
-      totalCost: currentCost + currentHold + currentRisk,
-      avgLeadTime: currentSumQty > 0 ? currentLT / currentSumQty : 0,
-      avgReliability: currentSumQty > 0 ? currentRel / currentSumQty : 0
-    };
-
-    return [optStrat, cheapStrat, safeStrat, currentStrat];
-  }, [optimizationResults, selectedProduct, suppliers, totalDemand]);
-
-  // Landed cost and savings calculations
+  // Retrieve savings percentage directly from backend solver payload
   const optimizedSavingsPct = useMemo(() => {
-    if (strategyComparison.length < 4) return 0;
-    const currentCost = strategyComparison[3].totalCost; // Current split total
-    const optCost = strategyComparison[0].totalCost;
-    if (currentCost <= 0) return 0;
-    return Math.max(0, Math.round(((currentCost - optCost) / currentCost) * 1000) / 10);
-  }, [strategyComparison]);
+    return optimizationResults?.optimizedSavingsPct || 0;
+  }, [optimizationResults]);
 
+  // Recommended replenishment text formulated using backend-driven alert values
   const recommendedReplenishmentText = useMemo(() => {
     if (!selectedProduct || !optimizationResults) return '';
-    const isBelowSS = selectedProduct.inHandInventory <= selectedProduct.safetyStock;
-    const isBelowROP = selectedProduct.inHandInventory <= (dailyUse * 20 + selectedProduct.safetyStock); // rough ROP
+    const record = riskRecords.find(r => r.erpCode === selectedProduct.erpCode) || {};
+    const alertLevel = record.alertLevel || 'OK';
     
     const splits = optimizationResults.solution.supplierDetails;
     const splitText = splits.map(s => `Order **${s.qty} units** from **${s.supplierName}** (${s.country})`).join(' and ');
     
-    if (isBelowSS) {
+    if (alertLevel === 'Critical') {
       return `⚠️ **CRITICAL DEFICIT**: Stock level is below Safety Stock (${selectedProduct.safetyStock} units). **Action required**: Reorder ${totalDemand} units immediately: ${splitText}.`;
-    } else if (isBelowROP) {
+    } else if (alertLevel === 'Reorder') {
       return `⚡ **REORDER POINT REACHED**: Current coverage is low. Recommended procurement plan: ${splitText}.`;
     } else {
       return `✅ **INVENTORY OPTIMAL**: Current inventory is stable. Recommended split for future orders: ${splitText}.`;
     }
-  }, [selectedProduct, optimizationResults, dailyUse, totalDemand]);
+  }, [selectedProduct, optimizationResults, riskRecords, totalDemand]);
 
   // --- GENERATING THE RFP TEXT DRAFT ---
   const rfpTextDraft = useMemo(() => {
@@ -837,7 +565,7 @@ Generated autonomously via Tech Mahindra Procurement Optimizer.
           <div className="form-group">
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <label className="form-label">Total Order Quantity (units)</label>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Suggested: {selectedProduct.roq || 15}</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Suggested: {selectedProduct?.roq || 15}</span>
             </div>
             <input
               type="number"
@@ -1141,7 +869,7 @@ Generated autonomously via Tech Mahindra Procurement Optimizer.
           )}
 
           {/* TAB 2: DEMAND SENSING INTERACTIVE CHART */}
-          {activeResultTab === 'charts' && (
+          {activeResultTab === 'charts' && optimizationResults && selectedProduct && (
             <div className="glass-card mb-0 animate-slide-up">
               <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', color: 'var(--text-bright)', fontWeight: 700 }}>Demand Sensing & Stock Projections</h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: 'var(--text-muted)' }}>Daily consumption pattern showing historical cycles and future coverage forecast.</p>
@@ -1324,7 +1052,7 @@ Generated autonomously via Tech Mahindra Procurement Optimizer.
           )}
 
           {/* TAB 3: STRATEGIES COMPASS CHART */}
-          {activeResultTab === 'strategies' && (
+          {activeResultTab === 'strategies' && optimizationResults && selectedProduct && (
             <div className="glass-card mb-0 animate-slide-up" style={{ overflowX: 'auto' }}>
               <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', color: 'var(--text-bright)', fontWeight: 700 }}>Sourcing Strategy Comparison</h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: 'var(--text-muted)' }}>Comparison of optimized outcomes against default and extreme procurement scenarios.</p>

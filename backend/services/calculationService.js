@@ -328,6 +328,46 @@ function getInventoryRiskRecords(products, suppliers, config = {}, lpiMap = {}, 
 
     const advancedRisk = calculateRiskScore(product, productSuppliers, config, lpiMap, newsMap);
 
+    const primarySupplier = productSuppliers.reduce(
+      (max, s) => (s.supplyPct > (max?.supplyPct || 0) ? s : max), 
+      null
+    );
+    
+    let alertLevel = 'OK'; 
+    let isAlertOk = true;
+    let alertReason = '';
+    
+    const coverage = product.daysOfCoverage !== undefined ? product.daysOfCoverage : 30;
+    if (coverage <= 15 || product.inHandInventory <= (product.safetyStock || 0)) {
+      alertLevel = 'Critical';
+      isAlertOk = false;
+      if (product.inHandInventory <= (product.safetyStock || 0)) {
+        alertReason = `Critical deficit: Stock (${product.inHandInventory} units) is below safety stock limit of ${product.safetyStock || 0} units.`;
+      } else {
+        alertReason = `Critical coverage: Only ${coverage} days of supply remaining.`;
+      }
+    } 
+    else if (coverage <= 35) {
+      alertLevel = 'Reorder';
+      isAlertOk = false;
+      alertReason = `Reorder point reached: Days of coverage is low (${coverage} days remaining).`;
+    } 
+    else if (primarySupplier && primarySupplier.reliability < 90) {
+      alertLevel = 'Supplier Risk';
+      isAlertOk = false;
+      alertReason = `Threat to supply reliability: Principal supplier (${primarySupplier.supplierName}) reliability index is low (${primarySupplier.reliability}%).`;
+    } 
+    else if (primarySupplier && primarySupplier.region === 'Asia') {
+      alertLevel = 'Corridor Threat';
+      isAlertOk = false;
+      alertReason = `High corridor threat: Sourced primarily from Asia region (${primarySupplier.supplyPct}% risk exposure).`;
+    } 
+    else {
+      alertLevel = 'OK';
+      isAlertOk = true;
+      alertReason = `OK: Stock level stable (${coverage} days of coverage). Principal supplier reliability is solid.`;
+    }
+
     return {
       ...product,
       maxLeadTime,
@@ -335,10 +375,13 @@ function getInventoryRiskRecords(products, suppliers, config = {}, lpiMap = {}, 
       sdeScore: sde.score,
       sdeClass: sde.classification,
       vedScore: ved.score,
-      vedClass: ved.classification, // Keep legacy compatibility if needed or use actual ved class
+      vedClass: ved.classification, 
       riskValue,
       riskLevel,
       suppliers: productSuppliers,
+      alertLevel,
+      isAlertOk,
+      alertReason,
       
       subScores: advancedRisk.subScores,
       rawMetrics: advancedRisk.rawMetrics,
@@ -405,7 +448,8 @@ function getRiskSummary(products, suppliers, config = {}, lpiMap = {}, newsMap =
     riskSegments,
     sdeSegments,
     vedSegments,
-    avgRiskScore: records.length > 0 ? (records.reduce((sum, r) => sum + r.scoreFinal, 0) / records.length) : 0
+    avgRiskScore: records.length > 0 ? (records.reduce((sum, r) => sum + r.scoreFinal, 0) / records.length) : 0,
+    avgDaysOfCoverage: products.length > 0 ? Math.round(products.reduce((sum, p) => sum + (p.daysOfCoverage || p.daysOfCover || 30), 0) / products.length) : 0
   };
 }
 
@@ -773,7 +817,7 @@ function solveProcurement(
     const safetyStockCost = safetyStockQty * holdingCostPerUnit;
 
     const riskFactor = (riskScore / 100) * riskWeight * criticalityFactor;
-    const W = landedCostPerUnit + (holdingCostPerUnit / 2) + landedCostCostPerUnit * riskFactor; // Fix typo from front: landedCostPerUnit * riskFactor
+    const W = landedCostPerUnit + (holdingCostPerUnit / 2) + landedCostPerUnit * riskFactor; // Fix typo from front: landedCostPerUnit * riskFactor
 
     return {
       supplierId: s.supplierId,
@@ -929,12 +973,207 @@ function solveProcurement(
     relaxationMsg = 'Constraints relaxed: Single sourcing allowed to satisfy MOQ constraints.';
   }
 
+  // --- Calculate dailyUse ---
+  const inv = selectedProduct.inHandInventory || 0;
+  const doc = selectedProduct.daysOfCoverage || selectedProduct.daysOfCover || 30;
+  dailyUse = Math.max(1, doc > 0 ? Math.round((inv / doc) * 10) / 10 : 2);
+
+  // --- Seed-based pseudo-random generator ---
+  function createSeededRandom(seedString) {
+    let h = 1779033703 ^ seedString.length;
+    for (let i = 0; i < seedString.length; i++) {
+      h = Math.imul(h ^ seedString.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function() {
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      return ((h ^= h >>> 16) >>> 0) / 4294967296;
+    };
+  }
+
+  // --- Projections Simulation ---
+  const rand = createSeededRandom(selectedProduct.erpCode || 'PRD0001');
+  const avgDailyDem = dailyUse;
+  const currentStock = inv;
+  
+  let reorderLeadTime = 15;
+  if (bestSolution && bestSolution.supplierDetails) {
+    const currentSum = bestSolution.supplierDetails.reduce((sum, s) => sum + s.qty, 0);
+    if (currentSum > 0) {
+      reorderLeadTime = Math.round(bestSolution.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * (s.qty / currentSum), 0));
+    }
+  }
+  
+  let tempStock = currentStock;
+  const historyPoints = [];
+  for (let day = 0; day >= -30; day--) {
+    historyPoints.unshift({
+      day,
+      stock: tempStock,
+      demand: Math.max(0, Math.round((avgDailyDem + (rand() - 0.5) * avgDailyDem * 0.4) * 10) / 10),
+    });
+    tempStock += historyPoints[0].demand;
+    if (day === -12) {
+      tempStock -= selectedProduct.roq || 15;
+    }
+  }
+  
+  let offset = currentStock - historyPoints[historyPoints.length - 1].stock;
+  historyPoints.forEach(p => {
+    p.stock = Math.max(0, p.stock + offset);
+  });
+
+  let stockNoOrder = currentStock;
+  let stockWithOrder = currentStock;
+  const optOrderQty = totalDemand;
+  
+  const projectionPoints = [];
+  for (let day = 1; day <= 15; day++) {
+    const dem = Math.max(0, Math.round((avgDailyDem + (rand() - 0.5) * avgDailyDem * 0.3) * 10) / 10);
+    
+    stockNoOrder = Math.max(0, stockNoOrder - dem);
+    stockWithOrder = stockWithOrder - dem;
+    
+    if (day === reorderLeadTime) {
+      stockWithOrder += optOrderQty;
+    }
+    
+    projectionPoints.push({
+      day,
+      demand: dem,
+      stockNoOrder: Math.round(stockNoOrder * 10) / 10,
+      stockWithOrder: Math.max(0, Math.round(stockWithOrder * 10) / 10),
+    });
+  }
+  
+  const demandSensingData = [];
+  historyPoints.forEach(p => {
+    demandSensingData.push({
+      dayLabel: `Day ${p.day === 0 ? 'Today' : p.day}`,
+      dayVal: p.day,
+      historicalStock: Math.round(p.stock),
+      demand: p.demand,
+      projectedNoOrder: null,
+      projectedWithOrder: null,
+    });
+  });
+  
+  demandSensingData[demandSensingData.length - 1].projectedNoOrder = currentStock;
+  demandSensingData[demandSensingData.length - 1].projectedWithOrder = currentStock;
+
+  projectionPoints.forEach(p => {
+    demandSensingData.push({
+      dayLabel: `Day +${p.day}`,
+      dayVal: p.day,
+      historicalStock: null,
+      demand: p.demand,
+      projectedNoOrder: p.stockNoOrder,
+      projectedWithOrder: p.stockWithOrder,
+    });
+  });
+
+  // --- Strategy Comparisons ---
+  const D = totalDemand;
+  const sortedByLanded = [...supplierCosts].sort((a, b) => a.landedCostPerUnit - b.landedCostPerUnit);
+  const sortedByRisk = [...supplierCosts].sort((a, b) => a.riskScore - b.riskScore);
+  
+  const optSumQty = bestSolution.supplierDetails.reduce((sum, s) => sum + s.qty, 0);
+  const optStrat = {
+    name: 'Optimized Model Suggestion',
+    isOpt: true,
+    allocations: bestSolution.supplierDetails.map(s => `${s.supplierName}: ${s.qty} units (${s.sharePct}%)`).join(', '),
+    landedCost: bestSolution.landedCost,
+    holdingCost: bestSolution.holdingCost + bestSolution.safetyStockCost,
+    riskPenalty: bestSolution.riskPenalty,
+    totalCost: bestSolution.totalCost,
+    avgLeadTime: optSumQty > 0 ? bestSolution.supplierDetails.reduce((sum, s) => sum + s.leadTimeDays * s.qty, 0) / optSumQty : 0,
+    avgReliability: optSumQty > 0 ? bestSolution.supplierDetails.reduce((sum, s) => sum + s.reliability * s.qty, 0) / optSumQty : 0
+  };
+
+  const cheapestSupp = sortedByLanded[0];
+  const cheapestQty = Math.ceil(D / (cheapestSupp.moq || 1)) * (cheapestSupp.moq || 1);
+  const cheapStrat = {
+    name: 'Lowest Landed Cost (Single Sourcing)',
+    allocations: `${cheapestSupp.supplierName}: ${cheapestQty} units (100%)`,
+    landedCost: cheapestQty * cheapestSupp.landedCostPerUnit,
+    holdingCost: (cheapestQty / 2) * cheapestSupp.holdingCostPerUnit + cheapestSupp.safetyStockCost,
+    riskPenalty: cheapestQty * cheapestSupp.landedCostPerUnit * cheapestSupp.riskFactor,
+    avgLeadTime: cheapestSupp.leadTimeDays,
+    avgReliability: cheapestSupp.reliability
+  };
+  cheapStrat.totalCost = cheapStrat.landedCost + cheapStrat.holdingCost + cheapStrat.riskPenalty;
+
+  const safestSupp = sortedByRisk[0];
+  const safestQty = Math.ceil(D / (safestSupp.moq || 1)) * (safestSupp.moq || 1);
+  const safeStrat = {
+    name: 'Lowest Risk Profile',
+    allocations: `${safestSupp.supplierName}: ${safestQty} units (100%)`,
+    landedCost: safestQty * safestSupp.landedCostPerUnit,
+    holdingCost: (safestQty / 2) * safestSupp.holdingCostPerUnit + safestSupp.safetyStockCost,
+    riskPenalty: safestQty * safestSupp.landedCostPerUnit * safestSupp.riskFactor,
+    avgLeadTime: safestSupp.leadTimeDays,
+    avgReliability: safestSupp.reliability
+  };
+  safeStrat.totalCost = safeStrat.landedCost + safeStrat.holdingCost + safeStrat.riskPenalty;
+
+  let currentCost = 0;
+  let currentHold = 0;
+  let currentRisk = 0;
+  let currentLT = 0;
+  let currentRel = 0;
+  const currentAllocStrs = [];
+  const currentQtys = {};
+  let currentSumQty = 0;
+
+  supplierCosts.forEach(s => {
+    const origSupp = suppliers.find(orig => orig.supplierId === s.supplierId) || s;
+    const supplyPct = origSupp.supplyPct !== undefined ? origSupp.supplyPct : 50;
+    let qty = Math.round(D * (supplyPct / 100));
+    if (qty > 0) {
+      qty = Math.ceil(qty / (s.moq || 1)) * (s.moq || 1);
+    }
+    currentQtys[s.supplierId] = qty;
+    currentSumQty += qty;
+  });
+
+  supplierCosts.forEach(s => {
+    const qty = currentQtys[s.supplierId];
+    if (qty > 0) {
+      const share = currentSumQty > 0 ? Math.round((qty / currentSumQty) * 100) : 0;
+      currentAllocStrs.push(`${s.supplierName}: ${qty} units (${share}%)`);
+      currentCost += qty * s.landedCostPerUnit;
+      currentHold += (qty / 2) * s.holdingCostPerUnit + s.safetyStockCost;
+      currentRisk += qty * s.landedCostPerUnit * s.riskFactor;
+      currentLT += qty * s.leadTimeDays;
+      currentRel += qty * s.reliability;
+    }
+  });
+
+  const currentStrat = {
+    name: 'Current Default Allocation (As-Is)',
+    allocations: currentAllocStrs.join(', ') || 'No allocation',
+    landedCost: currentCost,
+    holdingCost: currentHold,
+    riskPenalty: currentRisk,
+    totalCost: currentCost + currentHold + currentRisk,
+    avgLeadTime: currentSumQty > 0 ? currentLT / currentSumQty : 0,
+    avgReliability: currentSumQty > 0 ? currentRel / currentSumQty : 0
+  };
+
+  const strategies = [optStrat, cheapStrat, safeStrat, currentStrat];
+  const optimizedSavingsPct = currentCost > 0 ? Math.max(0, Math.round(((currentCost - bestSolution.totalCost) / currentCost) * 1000) / 10) : 0;
+
   return {
     feasible: true,
     solution: bestSolution,
     relaxed: isRelaxed,
     relaxationMsg,
-    supplierCosts
+    supplierCosts,
+    dailyUse,
+    demandSensingData,
+    strategies,
+    optimizedSavingsPct
   };
 }
 
@@ -1182,6 +1421,143 @@ function getCalculationDetails(product, localCrit, localTar, localCorr, config, 
   };
 }
 
+function calculateCriticalityScores(
+  components,
+  sdeWeights = { concentration: 0.25, leadTime: 0.20, reliability: 0.20, buffer: 0.20, moq: 0.10, geography: 0.05 },
+  vedWeights = { prodStop: 0.35, bottleneck: 0.20, substitutability: 0.20, safetyQuality: 0.15, recovery: 0.10 },
+  countryTiers = {},
+  bandsConfig = [
+    { name: 'Low', min: 1, max: 4, color: 'band-low' },
+    { name: 'Moderate', min: 5, max: 9, color: 'band-moderate' },
+    { name: 'High', min: 10, max: 15, color: 'band-high' },
+    { name: 'Very High', min: 16, max: 20, color: 'band-veryhigh' },
+    { name: 'Critical', min: 21, max: 25, color: 'band-critical' }
+  ],
+  stockoutConfig = { inHandLowDays: 10, docLowDays: 15, leadTimeLongDays: 30 }
+) {
+  const getBandName = (score) => {
+    const band = bandsConfig.find(b => score >= b.min && score <= b.max);
+    return band ? band.name : 'Low';
+  };
+
+  const getBandColor = (score) => {
+    const band = bandsConfig.find(b => score >= b.min && score <= b.max);
+    return band ? band.color : 'band-low';
+  };
+
+  return components.map(comp => {
+    // 1. Supplier Concentration
+    const supplyPct = Number(comp.supplyPct || 100);
+    const numSuppliers = Number(comp.numSuppliers || 1);
+    let concentration = 1;
+    if (supplyPct > 85 || numSuppliers === 1) concentration = 5;
+    else if (supplyPct > 70) concentration = 4;
+    else if (supplyPct > 50) concentration = 3;
+    else if (supplyPct >= 30) concentration = 2;
+    else concentration = 1;
+
+    // 2. Lead Time Days
+    const leadTime = Number(comp.leadTimeDays || 15);
+    let leadTimeScore = 1;
+    if (leadTime > 60) leadTimeScore = 5;
+    else if (leadTime > 30) leadTimeScore = 4;
+    else if (leadTime > 14) leadTimeScore = 3;
+    else if (leadTime > 7) leadTimeScore = 2;
+    else leadTimeScore = 1;
+
+    // 3. Reliability (OTIF %)
+    const otif = Number(comp.reliabilityOTIF || 90);
+    let reliabilityScore = 1;
+    if (otif < 60) reliabilityScore = 5;
+    else if (otif <= 75) reliabilityScore = 4;
+    else if (otif <= 85) reliabilityScore = 3;
+    else if (otif <= 95) reliabilityScore = 2;
+    else reliabilityScore = 1;
+
+    // 4. Inventory Buffer Strength
+    const doc = Number(comp.daysOfCoverage || 20);
+    const bufferRatio = leadTime > 0 ? doc / leadTime : 3.0;
+    let bufferScore = 1;
+    if (bufferRatio < 0.5) bufferScore = 5;
+    else if (bufferRatio <= 1.0) bufferScore = 4;
+    else if (bufferRatio <= 2.0) bufferScore = 3;
+    else if (bufferRatio <= 3.0) bufferScore = 2;
+    else bufferScore = 1;
+
+    // 5. MOQ Rigidity
+    const moq = Number(comp.moq || 1);
+    const roq = Number(comp.roq || 10);
+    const moqRatio = roq > 0 ? moq / roq : 1.0;
+    let moqScore = 1;
+    if (moqRatio > 2.5) moqScore = 5;
+    else if (moqRatio > 1.5) moqScore = 4;
+    else if (moqRatio > 1.0) moqScore = 3;
+    else if (moqRatio >= 0.5) moqScore = 2;
+    else moqScore = 1;
+
+    // 6. Geography risk
+    const country = comp.countryOfOrigin || 'India';
+    const geoScore = Number(countryTiers[country] || countryTiers['Other'] || 3);
+
+    // Compute SDE score (weighted and rounded to 1-5 integer)
+    const rawSDE = (
+      (sdeWeights.concentration || 0.25) * concentration +
+      (sdeWeights.leadTime || 0.20) * leadTimeScore +
+      (sdeWeights.reliability || 0.20) * reliabilityScore +
+      (sdeWeights.buffer || 0.20) * bufferScore +
+      (sdeWeights.moq || 0.10) * moqScore +
+      (sdeWeights.geography || 0.05) * geoScore
+    );
+    const sdeScore = Math.min(5, Math.max(1, Math.round(rawSDE)));
+
+    // Compute VED score (weighted and rounded to 1-5 integer)
+    const rawVED = (
+      (vedWeights.prodStop || 0.35) * Number(comp.prodStop || 3) +
+      (vedWeights.bottleneck || 0.20) * Number(comp.bottleneck || 3) +
+      (vedWeights.substitutability || 0.20) * Number(comp.substitutability || 3) +
+      (vedWeights.safetyQuality || 0.15) * Number(comp.safetyQuality || 3) +
+      (vedWeights.recovery || 0.10) * Number(comp.recovery || 3)
+    );
+    const vedScore = Math.min(5, Math.max(1, Math.round(rawVED)));
+
+    const compositeScore = sdeScore * vedScore;
+    const band = getBandName(compositeScore);
+    const colorClass = getBandColor(compositeScore);
+
+    // Derived flags & stats
+    const supplierDependencyFlag = supplyPct > 80 ? 1 : 0;
+    
+    // Stockout exposure flag
+    const inHand = Number(comp.inHandInventory || 0);
+    const safetyStock = Number(comp.safetyStock || 5);
+    const inTransit = Number(comp.inTransitInventory || 0);
+    
+    const stockoutExposureFlag = (
+      inHand < safetyStock &&
+      doc < (stockoutConfig.docLowDays || 15) &&
+      inTransit === 0 &&
+      leadTime > (stockoutConfig.leadTimeLongDays || 30)
+    ) ? 1 : 0;
+
+    const inventoryValue = Number(comp.inventoryValue || 0);
+    const inventoryExposureValue = inventoryValue * sdeScore;
+
+    return {
+      ...comp,
+      sdeScore,
+      vedScore,
+      compositeScore,
+      band,
+      colorClass,
+      bufferRatio,
+      moqRatio,
+      supplierDependencyFlag,
+      stockoutExposureFlag,
+      inventoryExposureValue
+    };
+  });
+}
+
 module.exports = {
   getSdeClassification,
   getVedClassification,
@@ -1194,5 +1570,6 @@ module.exports = {
   runPairedScenarios,
   runSensitivityMatrix,
   solveProcurement,
-  getCalculationDetails
+  getCalculationDetails,
+  calculateCriticalityScores
 };

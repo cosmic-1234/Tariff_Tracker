@@ -1,14 +1,17 @@
 
 import { Package, AlertTriangle, TrendingUp, Globe, ArrowRight, ShieldAlert, Truck, BarChart3, Calculator } from 'lucide-react';
-import { productMaster } from '../data/productMaster.js';
-import { supplierMaster, getSuppliersForProduct } from '../data/supplierMaster.js';
-import { getInventoryCriticality } from '../data/productMaster.js';
 import { formatCurrency } from '../services/exchangeRateService.js';
 
-export default function Dashboard({ onNavigate, currency, convertAmount, products = productMaster, suppliers = supplierMaster }) {
+export default function Dashboard({ onNavigate, currency, convertAmount, products = [], suppliers = [], riskSummary = null }) {
 
   // Local helper for suppliers
   const getLocalSuppliers = (erpCode) => suppliers.filter(s => s.productErpCode === erpCode);
+
+  const getInventoryCriticality = (daysOfCoverage) => {
+    if (daysOfCoverage <= 15) return 'Critical';
+    if (daysOfCoverage <= 30) return 'Medium';
+    return 'Low';
+  };
 
   // Calculate dashboard KPIs
   const totalProducts = products.length;
@@ -18,7 +21,7 @@ export default function Dashboard({ onNavigate, currency, convertAmount, product
   const criticalProducts = products.filter(p => getInventoryCriticality(p.daysOfCoverage) === 'Critical');
 
   const totalInventoryValue = products.reduce((sum, p) => sum + p.inventoryValue, 0);
-  const avgDaysOfCoverage = totalProducts > 0 ? Math.round(products.reduce((sum, p) => sum + p.daysOfCoverage, 0) / totalProducts) : 0;
+  const avgDaysOfCoverage = riskSummary ? riskSummary.avgDaysOfCoverage : 0;
 
 
   // Top products by inventory value

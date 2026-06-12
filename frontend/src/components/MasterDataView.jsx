@@ -1,9 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Globe, Ship, Plane, MapPin, DollarSign } from 'lucide-react';
 import { countries, regions, majorCorridors, insuranceCostMatrix, shippingCostMatrix, tariffRateTable, getCountryByCode } from '../data/masterData.js';
-import { supplierMaster, getAllSuppliers } from '../data/supplierMaster.js';
 
-export default function MasterDataView({ suppliers = supplierMaster }) {
+export default function MasterDataView({ suppliers = [] }) {
   const [activeTab, setActiveTab] = useState('countries');
 
   const getLocalUniqueSuppliers = () => {
