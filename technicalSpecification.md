@@ -224,6 +224,142 @@ npm start
 
 ---
 
+## 🐳 Docker Containerization & Orchestration
+
+The application is containerized into separate frontend and backend tiers. This ensures environment consistency, isolated dependencies, and trivial intranet scaling.
+
+### 1. Dockerfile Configurations
+
+*   **Backend Dockerfile (`backend/Dockerfile`)**: Builds on a lightweight `node:20-alpine` image. It sets `NODE_ENV=production`, runs `npm ci --omit=dev` to install only production dependencies, copies the source code, and exposes port `5000` to handle Express API requests.
+*   **Frontend Dockerfile (`frontend/Dockerfile`)**: Uses a multi-stage Nginx build:
+    1.  *Stage 1 (Build)*: Uses `node:20-alpine` to run `npm ci` and compile static assets (`npm run build`).
+    2.  *Stage 2 (Nginx)*: Copies the built React assets (`/app/dist`) into `nginx:stable-alpine` and exposes port `80` to serve them.
+
+### 2. Multi-Container Orchestration (`docker-compose.yml`)
+
+The root `docker-compose.yml` file configures and links the services:
+*   `backend`: Builds from `./backend`, exposing port `5000`. Reads local configurations via `env_file`.
+*   `frontend`: Builds from `./frontend`, exposing port `80` inside Nginx, mapped to port `5173` on the host machine. It automatically runs after the `backend` starts.
+
+### 3. Exact Commands to Build and Run the App via Docker
+
+To start the entire application (both frontend and backend containers) in detached mode, execute this command from the project root:
+```bash
+docker compose up --build -d
+```
+
+To stop all services and tear down the containers:
+```bash
+docker compose down
+```
+
+To view real-time logs from both containers:
+```bash
+docker compose logs -f
+```
+
+---
+
+## 📡 Complete REST API Catalog
+
+The backend exposes 16 endpoints to handle data access, advanced logistics simulations, Bedrock AI queries, and external API proxying.
+
+### Group 1: Core Database Metadata Routes
+
+#### 1. API Server Health Check
+*   **Route**: `GET /api/health`
+*   **Purpose**: Checks server health and database connectivity.
+*   **Response**: `{ "status": "success", "message": "API is healthy and MongoDB is connected" }`
+
+#### 2. Get Product Master list
+*   **Route**: `GET /api/products`
+*   **Purpose**: Returns all products in the database.
+*   **Response**: `{ "status": "success", "products": [...] }`
+
+#### 3. Get Supplier Master list
+*   **Route**: `GET /api/suppliers`
+*   **Purpose**: Returns all suppliers in the database.
+*   **Response**: `{ "status": "success", "suppliers": [...] }`
+
+#### 4. Get Suppliers for SKU
+*   **Route**: `GET /api/suppliers/:productErpCode`
+*   **Purpose**: Returns suppliers registered for a specific product ERP code.
+*   **Response**: `{ "status": "success", "suppliers": [...] }`
+
+### Group 2: Mathematical Calculations & Analytics Routes
+
+#### 5. Calculate SDE/VED Risk Records
+*   **Route**: `POST /api/calculations/risk-records`
+*   **Purpose**: Calculates SDE/VED classes, lead time risk points, and 0-100 scores for all products.
+*   **Request Body**: `{ "thresholds": {...}, "weightsA": {...}, "weightsB": {...} }`
+*   **Response**: `{ "success": true, "records": [...], "summary": {...} }`
+
+#### 6. Retrieve Detailed Mathematical Risk Derivations
+*   **Route**: `POST /api/calculations/risk-details`
+*   **Purpose**: Computes step-by-step risk formulas and invokes Amazon Bedrock Claude-3 AI assessments.
+*   **Request Body**: `{ "product": {...}, "localCrit": 0.5, "localTar": {...}, "localCorr": {...}, "config": {...}, "activeModel": "ModelB" }`
+*   **Response**: `{ "success": true, "calcDetails": { "intermediateVars": {...}, "aiAnalysis": "..." } }`
+
+#### 7. Calculate Landed Costs & Supplier Comparisons
+*   **Route**: `POST /api/calculations/tariff`
+*   **Purpose**: Calculates itemized landed cost breakdown and supplier comparisons for the Tariff Impact Calculator.
+*   **Request Body**: `{ "selectedProduct": {...}, "destinationCountry": "...", "unitFobPrice": 10, "orderQty": 100, "overrides": {...} }`
+*   **Response**: `{ "success": true, "breakdowns": [...], "comparison": {...} }`
+
+#### 8. Run Tariff Scenario Overrides & Sensitivity Matrix
+*   **Route**: `POST /api/calculations/scenario`
+*   **Purpose**: Computes positive/negative tariff shifts and generates the 10-level sensitivity analysis matrix.
+*   **Request Body**: Same parameters as `/api/calculations/tariff` plus simulated adjustments.
+*   **Response**: `{ "success": true, "scenarioResults": {...}, "sensitivityMatrix": [...] }`
+
+#### 9. Solve Procurement Sourcing Splits (MILP Optimizer)
+*   **Route**: `POST /api/calculations/procurement-optimizer`
+*   **Purpose**: Calculates optimal splits respecting MOQs and risk multipliers, returns cost forecasts, and compiles demand sensing charts.
+*   **Request Body**: `{ "selectedProduct": {...}, "suppliers": [...], "serviceLevelZ": 1.65, "dailyUse": 2.0, "destinationCountry": "India", "dualSourcingEnabled": true, "maxSharePct": 0.8, "totalDemand": 100, "holdingCostRate": 0.15, "riskWeight": 1.0, "criticalityInfo": {...} }`
+*   **Response**: `{ "success": true, "optimizationResults": { "feasible": true, "solution": {...}, "demandSensingData": [...], "strategies": [...], "optimizedSavingsPct": 12.5 } }`
+
+#### 10. Calculate Criticality Metrics (5x5 Matrix)
+*   **Route**: `POST /api/calculations/criticality`
+*   **Purpose**: Calculates weighted 5x5 criticality scoring and stockout risks.
+*   **Request Body**: `{ "components": [...], "sdeWeights": {...}, "vedWeights": {...}, ... }`
+*   **Response**: `{ "success": true, "criticalityResults": {...} }`
+
+#### 11. Calculate FOB price adjustments (MOQ Multiplier)
+*   **Route**: `POST /api/calculations/fob-calculator`
+*   **Purpose**: Computes backend-driven MOQ scale factor unit cost calculations.
+*   **Request Body**: `{ "supplierPrice": 10, "moqMultiplier": 3 }`
+*   **Response**: `{ "success": true, "calculatedFob": 30 }`
+
+#### 12. Recalculate Override values
+*   **Route**: `POST /api/calculations/override-calculator`
+*   **Purpose**: Converts custom overrides and updates baseline calculations.
+*   **Request Body**: `{ "originalTariffPct": 5, "overrideValue": 25, "isPercentage": true }`
+*   **Response**: `{ "success": true, "newTariffPct": 25 }`
+
+### Group 3: Geopolitical News & External API Proxy Routes
+
+#### 13. Proxy UK Trade Tariff Headings
+*   **Route**: `GET /api/external/trade-tariff/headings/:id`
+*   **Purpose**: Redirects search query requests to HMRC Trade Tariff API for headings data.
+*   **Response**: UK Trade Tariff JSON.
+
+#### 14. Proxy UK Trade Tariff Chapters
+*   **Route**: `GET /api/external/trade-tariff/chapters/:id`
+*   **Purpose**: Redirects search query requests to HMRC Trade Tariff API for chapters data.
+*   **Response**: UK Trade Tariff JSON.
+
+#### 15. Proxy REST Countries all-list
+*   **Route**: `GET /api/external/countries`
+*   **Purpose**: Redirects search query requests to REST Countries for flag links, regional codes, and name profiles.
+*   **Response**: REST Countries all JSON array.
+
+#### 16. Proxy Exchange Rates
+*   **Route**: `GET /api/external/exchange-rates/latest/:baseCurrency`
+*   **Purpose**: Fetches live exchange rates using the backend `EXCHANGE_RATE_API_KEY` configuration.
+*   **Response**: ExchangeRate-API V6 rates payload.
+
+---
+
 ## 🛠️ Troubleshooting & FAQs
 
 #### Q1: What happens if the backend server runs without AWS Bedrock Keys?
