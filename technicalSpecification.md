@@ -358,6 +358,18 @@ The backend exposes 16 endpoints to handle data access, advanced logistics simul
 *   **Purpose**: Fetches live exchange rates using the backend `EXCHANGE_RATE_API_KEY` configuration.
 *   **Response**: ExchangeRate-API V6 rates payload.
 
+### Group 4: Internal Third-Party API Integrations
+
+The backend server also executes direct outgoing HTTP queries to the following public external API services to pull real-time data:
+
+1.  **World Bank Logistics Performance Index (LPI) API**:
+    *   **External Endpoint**: `https://api.worldbank.org/v2/country/{countryCode}/indicator/LP.LPI.OVRL.XQ?format=json`
+    *   **Purpose**: Retrieves historical logistics capability index ratings by country code.
+
+2.  **GDELT Project News Document API**:
+    *   **External Endpoint**: `https://api.gdeltproject.org/api/v2/doc/doc?query=(tariff%20OR%20%22trade%20war%22%20OR%20%22shipping%20disruption%22)%20{countryName}&mode=artlist&format=json&maxrecords=5`
+    *   **Purpose**: Dynamically searches recent global news publications containing geopolitical corridor and trade-barrier headlines matching a supplier's origin country.
+
 ---
 
 ## 🛠️ Troubleshooting & FAQs
